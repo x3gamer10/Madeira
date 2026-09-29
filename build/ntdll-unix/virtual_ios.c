@@ -11224,8 +11224,26 @@ static inline int mprotect_exec( void *base, size_t size, int unix_prot )
          * never executed from its own pages (it is translated into the JIT
          * pool), so apply the protection the caller asked for instead of
          * failing every PAGE_READONLY request with STATUS_ACCESS_DENIED.
-         * Outside a window this is the upstream rule. */
-        if (!(unix_prot & PROT_WRITE) && !ios_wow_in_window( base )) return -1;
+         *
+         * Not only inside the window: a WoW64 process's own 64-bit modules
+         * (wow64.dll, ntdll, xtajit) sit OUTSIDE it -- on a 63 GB map just
+         * below it -- and force_exec_prot applies to them too.  Refusing their
+         * PAGE_READONLY left wow64.dll's IAT page unprotected-back, so the
+         * import rewrite into the JIT pool ([iat-sync]) never ran and the
+         * first import call jumped to an unresolved RVA (Saints Row 2 on an
+         * iPhone 17: "set_vprot failed ... protect=0x2", then pc=0x34f06).
+         * Nothing needs PROT_EXEC here: all code runs from the JIT pool.  So,
+         * as github.com/bahacan16/madeira-bcd (125hz's WoW64 tree) does,
+         * apply the requested protection everywhere. */
+        if (!(unix_prot & PROT_WRITE))
+        {
+            static unsigned long forceexec_n;
+
+            if (++forceexec_n <= 8 && !ios_in_mach_exc)
+                dprintf( 2, "[force-exec] PROT_EXEC unavailable on iOS; applying the requested "
+                            "protection unforced: base=%p size=0x%lx unix_prot=0x%x (#%lu)\n",
+                         base, (unsigned long)size, unix_prot, forceexec_n );
+        }
 #else
         if (!(unix_prot & PROT_WRITE)) return -1;
 #endif
