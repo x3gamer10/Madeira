@@ -29,4 +29,12 @@ typedef struct _MEMORY_BASIC_INFORMATION {
 static inline size_t VirtualQuery(LPCVOID, MEMORY_BASIC_INFORMATION*, size_t) {
   return 0;
 }
+
+// FEXCore/Source/Utils/AllocatorHooks.cpp defines IOS_RPM_GUARD() only in its
+// ENABLE_FEX_ALLOCATOR (rpmalloc) branch but also uses it in the system-malloc
+// branch this build compiles (ENABLE_FEX_ALLOCATOR=OFF). With no rpmalloc there
+// is no lock to take, so it is a no-op here.
+#ifndef IOS_RPM_GUARD
+#define IOS_RPM_GUARD() ((void)0)
+#endif
 #endif
