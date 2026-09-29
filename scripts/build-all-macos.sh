@@ -200,6 +200,17 @@ stage_llvm_ios() {
 }
 
 stage_dxmt_ios() {
+    # airconv_context.cpp includes air_{msad,samplepos,tessellation}.h, which DXMT's
+    # meson build generates (src/airconv/meson.build: metal -> .air -> xxd). build.sh
+    # has no such step, so generate them into its shader-headers include dir.
+    local sh=build/dxmt-ios/shader-headers s n
+    mkdir -p "$sh"
+    for s in research/dxmt/src/airconv/shaders/*.metal; do
+        n=$(basename "$s" .metal)
+        xcrun -sdk macosx metal -o "$sh/$n.air" -c "$s" -std=metal3.1 --target=air64-apple-macos14.0
+        (cd "$sh" && xxd -n "$n" -i "$n.air" "$n.h")
+        echo "  $n.h OK"
+    done
     build/dxmt-ios/build.sh
     xcrun -sdk iphoneos libtool -static -o build/dxmt-ios/libdxmt_combined.a \
         build/dxmt-ios/obj/*.o toolchains/llvm-ios-build/lib/*.a
