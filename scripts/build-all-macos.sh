@@ -15,6 +15,10 @@ set -euo pipefail
 
 R="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$R"
+# Homebrew's bison/flex are keg-only; Wine's configure rejects the ancient system bison.
+for p in bison flex; do
+    [ -d "/opt/homebrew/opt/$p/bin" ] && export PATH="/opt/homebrew/opt/$p/bin:$PATH"
+done
 LOGS="$R/build-logs"; mkdir -p "$LOGS"
 JOBS="${JOBS:-$(sysctl -n hw.ncpu)}"
 LLVM_REF="${LLVM_REF:-llvmorg-15.0.7}"   # dxmt README says 15.0.7; BUILDING.md cites commit 8dfdcc7b7. Override if needed.
