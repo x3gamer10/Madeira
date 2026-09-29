@@ -47,11 +47,11 @@ stage_prereqs() {
     for t in cmake ninja meson python3 curl git wget; do
         command -v $t >/dev/null || brew install $([ $t = meson ] && echo meson || ([ $t = python3 ] && echo python || echo $t))
     done
-    for t in autoconf automake libtool pkg-config nasm ccache bison flex gettext xz sevenzip; do
+    for t in autoconf automake libtool pkg-config nasm ccache bison flex gettext xz; do
         brew list $t >/dev/null 2>&1 || brew install $t
     done
     # DXMT shaders need the Metal toolchain.
-    xcodebuild -downloadComponent MetalToolchain || echo "(Metal toolchain download failed/unneeded; continuing)"
+    xcodebuild -downloadComponent MetalToolchain >/dev/null 2>&1 || echo "(no separate Metal toolchain download on this Xcode; continuing)"
 }
 
 stage_submodules() {
@@ -71,24 +71,15 @@ stage_toolchain() {
 }
 
 stage_vcruntime() {
-    local out=app/Madeira/x86_64-vcruntime tmp; tmp="$(mktemp -d)"
+    # Microsoft's runtime DLLs are not in the repo (tools/fetch-vcruntime.md). CI copies them
+    # from a Windows runner's System32 and passes VCRUNTIME_DIR; locally, point it at a folder
+    # holding the 12 DLLs.
+    local out=app/Madeira/x86_64-vcruntime
+    [ -n "${VCRUNTIME_DIR:-}" ] || die "set VCRUNTIME_DIR to a folder with the 12 VC++ runtime DLLs (see tools/fetch-vcruntime.md)"
     mkdir -p "$out"
-    if [ -n "${VCRUNTIME_DIR:-}" ]; then cp "$VCRUNTIME_DIR"/*.dll "$out"/; return; fi
-    # Microsoft's own redistributable; you accept Microsoft's terms by running this.
-    curl -L -o "$tmp/vc.exe" https://aka.ms/vs/17/release/vc_redist.x64.exe
-    7zz x "$tmp/vc.exe" -o"$tmp/x" >/dev/null
-    # The exe is a WiX bundle: an attached container holds the real installer cabs.
-    find "$tmp/x" -type f \( -iname '*.cab' -o -iname '*.msi' \) | while read -r f; do
-        7zz x "$f" -o"$tmp/y" -y >/dev/null || true
-    done
-    # Cab members are stored under mangled names (e.g. "F_CENTRAL_msvcp140_x64"); map back.
-    for n in concrt140 msvcp140 msvcp140_1 msvcp140_2 msvcp140_atomic_wait msvcp140_codecvt_ids \
-             vcamp140 vccorlib140 vcomp140 vcruntime140 vcruntime140_1 vcruntime140_threads; do
-        f="$(find "$tmp" -type f -iname "*${n}_x64*" -o -type f -iname "${n}.dll" | grep -iv "_x86\|arm" | head -1 || true)"
-        [ -n "$f" ] && cp "$f" "$out/$n.dll" || echo "WARN: could not extract $n.dll"
-    done
+    cp "$VCRUNTIME_DIR"/*.dll "$out"/
+    [ "$(ls "$out"/*.dll | wc -l)" -ge 12 ] || die "need 12 DLLs in $out"
     ls "$out"
-    [ "$(ls "$out"/*.dll | wc -l)" -ge 12 ] || die "need 12 DLLs in $out. Extract them manually (tools/fetch-vcruntime.md) and re-run with VCRUNTIME_DIR=<dir>"
 }
 
 stage_licenses() { build/stage-licenses.sh; }

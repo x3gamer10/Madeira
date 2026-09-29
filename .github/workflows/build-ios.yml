@@ -1,12 +1,29 @@
 name: build-ios
 on: workflow_dispatch
 jobs:
+  vcruntime:
+    runs-on: windows-latest
+    steps:
+      - shell: pwsh
+        run: |
+          $names = 'concrt140','msvcp140','msvcp140_1','msvcp140_2','msvcp140_atomic_wait','msvcp140_codecvt_ids','vcamp140','vccorlib140','vcomp140','vcruntime140','vcruntime140_1','vcruntime140_threads'
+          New-Item -ItemType Directory vcrt | Out-Null
+          foreach ($n in $names) {
+            $f = "$env:SystemRoot\System32\$n.dll"
+            if (Test-Path $f) { Copy-Item $f vcrt } else { Write-Error "missing $f" }
+          }
+          Get-ChildItem vcrt
+      - uses: actions/upload-artifact@v4
+        with: { name: vcruntime, path: vcrt }
   build:
+    needs: vcruntime
     runs-on: macos-15
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
+      - uses: actions/download-artifact@v4
+        with: { name: vcruntime, path: vcrt }
       - uses: actions/cache@v4
         with:
           path: |
@@ -15,7 +32,7 @@ jobs:
             FEX/build-ios
           key: madeira-${{ hashFiles('build/**/*.sh', 'scripts/build-all-macos.sh') }}
       - run: chmod +x scripts/build-all-macos.sh build/*/*.sh build/*.sh
-      - run: scripts/build-all-macos.sh
+      - run: VCRUNTIME_DIR="$PWD/vcrt" scripts/build-all-macos.sh
       - if: always()
         uses: actions/upload-artifact@v4
         with:
