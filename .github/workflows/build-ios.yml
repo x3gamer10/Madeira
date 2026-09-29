@@ -1,0 +1,25 @@
+name: build-ios
+on: workflow_dispatch
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - uses: actions/cache@v4
+        with:
+          path: |
+            toolchains
+            build-logs
+            FEX/build-ios
+          key: madeira-${{ hashFiles('build/**/*.sh', 'scripts/build-all-macos.sh') }}
+      - run: chmod +x scripts/build-all-macos.sh build/*/*.sh build/*.sh
+      - run: scripts/build-all-macos.sh
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: madeira
+          path: |
+            build/ipa/Madeira.ipa
+            build-logs
