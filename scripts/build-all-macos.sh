@@ -99,7 +99,10 @@ stage_vcruntime() {
 stage_licenses() { build/stage-licenses.sh; }
 stage_gnutls()   { build/gnutls-ios/build.sh; }     # outputs are also tracked
 stage_ffmpeg()   { build/ffmpeg/build.sh; }
-stage_fex_ios()  { build/fex-ios/build.sh; }
+# FEX_IOS_HOST is NOT defined for this library: it selects code for FEX's Windows-side
+# modules (ARM64EC/WOW64 DLLs), which define IosMonoResolveRW, ios_fex_band_* etc. that
+# the app does not have. The patch guards the two probes that don't compile without it.
+stage_fex_ios()  { python3 tools/patch-fex-ios-probes.py; build/fex-ios/build.sh; }
 
 stage_freetype() {
     [ -d research/freetype ] || git clone --depth 1 --branch VER-2-13-3 https://github.com/freetype/freetype.git research/freetype

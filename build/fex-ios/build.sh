@@ -7,8 +7,7 @@ R="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 B="$R/FEX/build-ios"
 if [ ! -f "$B/CMakeCache.txt" ]; then
     cmake -S "$R/FEX" -B "$B" -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_SYSTEM_PROCESSOR=arm64 -DTUNE_CPU=none -DCMAKE_OSX_ARCHITECTURES=arm64 \
-        -DCMAKE_C_FLAGS=-DFEX_IOS_HOST -DCMAKE_ASM_FLAGS=-DFEX_IOS_HOST \
-        -DCMAKE_CXX_FLAGS="-DFEX_IOS_HOST -include $R/build/fex-ios/ios_win_stubs.h" \
+        -DCMAKE_CXX_FLAGS="-include $R/build/fex-ios/ios_win_stubs.h" \
         -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
         -DCMAKE_OSX_SYSROOT=iphoneos -DCMAKE_OSX_DEPLOYMENT_TARGET=17.0 -DCMAKE_BUILD_TYPE=Release \
         -DBUILD_TESTING=OFF -DBUILD_THUNKS=OFF -DBUILD_FEXCONFIG=OFF -DBUILD_FEX_LINUX_TESTS=OFF \
