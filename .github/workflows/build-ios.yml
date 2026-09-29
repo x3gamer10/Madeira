@@ -55,6 +55,15 @@ jobs:
             toolchains/llvm-ios-build/include
             toolchains/llvm-ios-build/lib/*.a
             toolchains/llvm-project/llvm/include
+      # The sources use iOS 26 SDK APIs (e.g. rusage_info_v6.ri_page_wait_time_mach), so
+      # pick the newest Xcode 26 on the image instead of the default 16.x.
+      - run: |
+          ls -d /Applications/Xcode*.app
+          X=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)
+          [ -n "$X" ] || { echo "no Xcode 26 on this runner image"; exit 1; }
+          sudo xcode-select -s "$X"
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
       - run: chmod +x scripts/build-all-macos.sh build/*/*.sh build/*.sh
       - run: VCRUNTIME_DIR="$PWD/vcrt" REQUIRE_CACHED_LLVM=1 scripts/build-all-macos.sh
       - if: always()
