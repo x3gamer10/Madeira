@@ -96,18 +96,19 @@ stage_freetype() {
     build/freetype-ios/build.sh
 }
 
-# ntdll-unix / win32u-unix include wine/build-macos/include/config.h and use its
-# generated headers. Not documented anywhere in the repo: this is a guess at a
-# plain macOS host configure of the wine fork. Fix here first if it fails.
+# ntdll-unix / win32u-unix include wine/build-macos/include/config.h and the
+# widl-generated headers (mfobjects.h etc.). Not documented in the repo: this is
+# a plain macOS host configure of the wine fork (Wine 11.4, single Makefile).
 stage_host_wine() {
-    export PATH="$(brew --prefix bison)/bin:$(brew --prefix flex)/bin:$PATH"
+    export PATH="$(brew --prefix bison)/bin:$(brew --prefix flex)/bin:$MINGW_DIR/bin:$PATH"
     bison --version | head -1
     mkdir -p wine/build-macos && cd wine/build-macos
-    [ -f config.status ] || ../configure --enable-win64 --without-x --disable-tests \
+    [ -f config.status ] || ../configure --without-x --disable-tests \
         --without-freetype --without-gnutls --without-vulkan
-    make -j"$JOBS" __tooldeps__ || true
-    make -j"$JOBS" include || true
+    make -j"$JOBS" __tooldeps__
+    make -j"$JOBS" include/all
     [ -f include/config.h ] || die "wine/build-macos/include/config.h missing"
+    [ -f include/mfobjects.h ] || die "widl headers (include/mfobjects.h) were not generated"
 }
 
 stage_ntdll_unix()  { build/ntdll-unix/build.sh; }
@@ -137,24 +138,32 @@ stage_wineserver() {
     build/wineserver/build.sh
 }
 
+# LLVM 15.0.7 for iOS, needed by DXMT's airconv. CI builds this in its own job and
+# caches it; the main job then finds it already present.
 stage_llvm_ios() {
+    if [ -f toolchains/llvm-ios-build/lib/libLLVMCore.a ]; then
+        echo "LLVM iOS libs already present (cache)"; return 0
+    fi
+    [ "${REQUIRE_CACHED_LLVM:-0}" != 1 ] || die "LLVM iOS build not cached yet: let the 'llvm' job finish, then re-run"
     mkdir -p toolchains
     if [ ! -d toolchains/llvm-project ]; then
         git clone --depth 1 --branch "$LLVM_REF" https://github.com/llvm/llvm-project.git toolchains/llvm-project
     fi
     # Apple ld rejects --gc-sections; treat iOS like Darwin (dxmt README).
     sed -i '' 's/MATCHES "Darwin"/MATCHES "Darwin|iOS"/g' toolchains/llvm-project/llvm/cmake/modules/AddLLVM.cmake
-    cmake -S toolchains/llvm-project/llvm -B toolchains/llvm-host-build -G Ninja -DCMAKE_BUILD_TYPE=Release \
-        -DLLVM_TARGETS_TO_BUILD= -DLLVM_INCLUDE_TESTS=Off
+    local common=(-G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+        -DLLVM_TARGETS_TO_BUILD= -DLLVM_ENABLE_PROJECTS= -DLLVM_INCLUDE_TESTS=Off
+        -DLLVM_INCLUDE_BENCHMARKS=Off -DLLVM_INCLUDE_EXAMPLES=Off -DLLVM_INCLUDE_DOCS=Off
+        -DLLVM_ENABLE_ZLIB=Off -DLLVM_ENABLE_ZSTD=Off -DLLVM_ENABLE_LIBXML2=Off -DLLVM_ENABLE_TERMINFO=Off)
+    cmake -S toolchains/llvm-project/llvm -B toolchains/llvm-host-build "${common[@]}"
     cmake --build toolchains/llvm-host-build --target llvm-tblgen
-    cmake -S toolchains/llvm-project/llvm -B toolchains/llvm-ios-build -G Ninja \
+    cmake -S toolchains/llvm-project/llvm -B toolchains/llvm-ios-build "${common[@]}" \
         -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_SYSROOT=iphoneos \
-        -DCMAKE_OSX_DEPLOYMENT_TARGET=17.0 -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_OSX_DEPLOYMENT_TARGET=17.0 \
         -DLLVM_HOST_TRIPLE=arm64-apple-ios17.0 -DLLVM_DEFAULT_TARGET_TRIPLE=arm64-apple-ios17.0 \
-        -DLLVM_TARGET_ARCH=host -DLLVM_TARGETS_TO_BUILD= -DLLVM_ENABLE_PROJECTS= \
-        -DLLVM_BUILD_TOOLS=Off -DLLVM_BUILD_UTILS=Off -DLLVM_INCLUDE_TESTS=Off -DLLVM_ENABLE_ZLIB=Off \
+        -DLLVM_TARGET_ARCH=host -DLLVM_BUILD_TOOLS=Off -DLLVM_BUILD_UTILS=Off \
         -DLLVM_TABLEGEN="$R/toolchains/llvm-host-build/bin/llvm-tblgen"
-    cmake --build toolchains/llvm-ios-build   # hours
+    cmake --build toolchains/llvm-ios-build
 }
 
 stage_dxmt_ios() {

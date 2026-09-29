@@ -1,5 +1,7 @@
 name: build-ios
 on: workflow_dispatch
+env:
+  LLVM_CACHE_KEY: llvm-ios-15.0.7-v1
 jobs:
   vcruntime:
     runs-on: windows-latest
@@ -15,6 +17,28 @@ jobs:
           Get-ChildItem vcrt
       - uses: actions/upload-artifact@v4
         with: { name: vcruntime, path: vcrt }
+
+  # LLVM 15 for iOS takes hours, so it gets its own job (own 6h budget) and a
+  # cache. Once cached, this job finishes in seconds on later runs.
+  llvm:
+    runs-on: macos-15
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - id: llvm
+        uses: actions/cache@v4
+        with:
+          key: ${{ env.LLVM_CACHE_KEY }}
+          path: |
+            toolchains/llvm-ios-build/include
+            toolchains/llvm-ios-build/lib/*.a
+            toolchains/llvm-project/llvm/include
+      - if: steps.llvm.outputs.cache-hit != 'true'
+        run: STAGES="prereqs llvm-ios" bash scripts/build-all-macos.sh
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with: { name: llvm-logs, path: build-logs }
+
   build:
     needs: vcruntime
     runs-on: macos-15
@@ -24,15 +48,15 @@ jobs:
         with: { submodules: recursive }
       - uses: actions/download-artifact@v4
         with: { name: vcruntime, path: vcrt }
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
         with:
+          key: ${{ env.LLVM_CACHE_KEY }}
           path: |
-            toolchains
-            build-logs
-            FEX/build-ios
-          key: madeira-${{ hashFiles('build/**/*.sh', 'scripts/build-all-macos.sh') }}
+            toolchains/llvm-ios-build/include
+            toolchains/llvm-ios-build/lib/*.a
+            toolchains/llvm-project/llvm/include
       - run: chmod +x scripts/build-all-macos.sh build/*/*.sh build/*.sh
-      - run: VCRUNTIME_DIR="$PWD/vcrt" scripts/build-all-macos.sh
+      - run: VCRUNTIME_DIR="$PWD/vcrt" REQUIRE_CACHED_LLVM=1 scripts/build-all-macos.sh
       - if: always()
         uses: actions/upload-artifact@v4
         with:
