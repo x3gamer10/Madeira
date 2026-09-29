@@ -65,9 +65,9 @@ jobs:
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
       # The 32-bit (WoW64) Windows farm takes ~an hour to build; reuse it until the
-      # wine or DXMT pin (or its build script) changes.
+      # wine or DXMT pin (or its build script, or an i386 patch) changes.
       - id: i386key
-        run: echo "key=i386-farm-$(git -C wine rev-parse HEAD)-$(git -C research/dxmt rev-parse HEAD)-${{ hashFiles('build/wine-i386/build.sh') }}" >> "$GITHUB_OUTPUT"
+        run: echo "key=i386-farm-$(git -C wine rev-parse HEAD)-$(git -C research/dxmt rev-parse HEAD)-${{ hashFiles('build/wine-i386/build.sh', 'patches/wine-i386-*.patch') }}" >> "$GITHUB_OUTPUT"
       - id: i386cache
         uses: actions/cache/restore@v4
         with:

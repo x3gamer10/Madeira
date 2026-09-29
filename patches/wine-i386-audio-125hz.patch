@@ -1,0 +1,236 @@
+Audio fixes from 125hz/wine pr/wow64-core c9c186e9 ("Misc: device notifications,
+MIDI notify loop, message boxes, no-3D wined3d, FAudio"), the Wine that madeira-bcd's
+Saints Row 2 build ships. Applied to the wine submodule before the i386 farm build
+(scripts/build-all-macos.sh, stage_wine_i386).
+
+- libs/faudio/src/FACT_internal.c: streaming wave banks that start at a non-zero
+  offset inside their file read their wave data `offset` bytes too early, so XACT
+  decodes the wrong bytes (noise/static).
+- libs/faudio/src/FAudio_internal_simd.c: i686 builds had no SSE2 mixing/resampling
+  paths compiled in, so every XAudio2/XACT title mixed with the scalar code under
+  translation (22-27% of all CPU in 125hz's profile), starving the audio thread.
+- dlls/mmdevapi/main.c: the MIDI notify loop fails closed instead of spinning on
+  uninitialised stack.
+
+--- a/libs/faudio/src/FACT_internal.c
++++ b/libs/faudio/src/FACT_internal.c
+@@ -34,6 +34,13 @@
+ #include "stb.h"
+ #define FACT_INTERNAL_rng() ((float) stb_frand())
+ 
++/* MADEIRA: build tag -- `strings xactengine*.dll | grep MADEIRA-FACT` answers
++ * "did the library change ship" on the artifact. */
++#if defined(__GNUC__) || defined(__clang__)
++__attribute__((used))
++#endif
++static const char madeira_fact_build_tag[] = "MADEIRA-FACT-2026-09-20-stream-base-offset";
++
+ /* XACT Versions */
+ 
+ #define FACT_CONTENT_VERSION_3_4 45
+@@ -3167,6 +3174,25 @@
+ 		}
+ 	}
+ 
++	/* MADEIRA: a streaming wave bank need not start at byte 0 of its file --
++	 * FACTStreamingParameters.offset exists precisely so a bank can live inside
++	 * a larger container. Every header read above honours it (SEEKSET adds
++	 * `offset`), but the entry offsets were left bank-relative, and those are
++	 * what the streaming reads use as absolute file positions
++	 * (FACT_INTERNAL_OnBufferEnd -> FACT_INTERNAL_ReadFile). The result was
++	 * wave data read `offset` bytes too early: correct format, wrong bytes,
++	 * which for a packetised codec means every packet fails to decode.
++	 * In-memory banks are always parsed with offset 0, so this is a no-op
++	 * for them. Done after the length fix-ups above, which need the
++	 * segment-relative values. */
++	if (isStreaming && offset != 0)
++	{
++		for (i = 0; i < wbinfo.dwEntryCount; i += 1)
++		{
++			wb->entries[i].PlayRegion.dwOffset += offset;
++		}
++	}
++
+ 	/* WaveBank Seek Tables */
+ 	if (	wbinfo.dwFlags & FACT_WAVEBANK_FLAGS_SEEKTABLES &&
+ 		header.Segments[FACT_WAVEBANK_SEGIDX_SEEKTABLES].dwLength > 0	)
+--- a/libs/faudio/src/FAudio_internal_simd.c
++++ b/libs/faudio/src/FAudio_internal_simd.c
+@@ -56,11 +56,43 @@
+ 
+ 	/* Mac OS X/Intel guarantees SSE2. */
+ 	#define NEED_SCALAR_CONVERTER_FALLBACKS 0
++#elif defined(__i386__) || defined(_M_IX86)
++	/* MADEIRA: 32-bit x86 reached this file's final `#else` and got the SCALAR
++	 * paths only, because nothing defines __SSE2__ for an i686 PE target
++	 * (clang does not enable SSE2 by default for i686-windows, unlike
++	 * x86_64-windows).  FAudio_INTERNAL_InitSIMDFunctions then had no SSE2
++	 * branch compiled in at all, so the runtime
++	 * IsProcessorFeaturePresent(PF_XMMI64_INSTRUCTIONS_AVAILABLE) check below
++	 * could never select one -- scalar double-precision mixing and resampling
++	 * for every XAudio2 title, which a profile put at 22-27% of all CPU under
++	 * translation.
++	 *
++	 * Every x86 CPU a Windows game of the XAudio2 era targets has SSE2, but
++	 * unlike x86_64 the ISA does not GUARANTEE it here, so this deliberately
++	 * differs from the x86_64 case in two ways: the scalar fallbacks are still
++	 * built, and the choice is still made at runtime by that feature check.
++	 * All this does is make the SSE2 half exist to be chosen.
++	 *
++	 * The SSE2 bodies are enabled per function with
++	 * __attribute__((target("sse2"))) rather than by compiling the whole file
++	 * -msse2: a file-wide flag would also let the compiler emit SSE2 into the
++	 * scalar fallbacks, which are the paths that have to keep running on a CPU
++	 * without it.  clang's <emmintrin.h> already marks every intrinsic with
++	 * the same target attribute, so it can be included without the flag. */
++	#define NEED_SCALAR_CONVERTER_FALLBACKS 1
++	#if defined(__clang__) || defined(__GNUC__)
++	#define MADEIRA_FAUDIO_SSE2_TARGET __attribute__((target("sse2")))
++	#define MADEIRA_FAUDIO_WANT_SSE2 1
++	#endif
+ #else
+ 	/* Need plain C implementations to support all other hardware */
+ 	#define NEED_SCALAR_CONVERTER_FALLBACKS 1
+ #endif
+ 
++#ifndef MADEIRA_FAUDIO_SSE2_TARGET
++#define MADEIRA_FAUDIO_SSE2_TARGET
++#endif
++
+ /* Our NEON paths require AArch64, don't check __ARM_NEON__ here */
+ #if defined(__aarch64__) || defined(_M_ARM64) || defined(__arm64ec__) || defined(_M_ARM64EC)
+ #include <arm_neon.h>
+@@ -71,6 +103,12 @@
+ #ifdef __SSE2__
+ #include <emmintrin.h>
+ #define HAVE_SSE2_INTRINSICS 1
++#elif defined(MADEIRA_FAUDIO_WANT_SSE2)
++/* MADEIRA (see the i386 note above): the intrinsics carry their own
++ * target("sse2") attribute, so the header is usable without -msse2 and each
++ * SSE2 function opts in individually. */
++#include <emmintrin.h>
++#define HAVE_SSE2_INTRINSICS 1
+ #endif
+ 
+ /* SECTION 1: Type Converters */
+@@ -122,7 +160,7 @@
+ #endif /* NEED_SCALAR_CONVERTER_FALLBACKS */
+ 
+ #if HAVE_SSE2_INTRINSICS
+-void FAudio_INTERNAL_Convert_U8_To_F32_SSE2(
++MADEIRA_FAUDIO_SSE2_TARGET void FAudio_INTERNAL_Convert_U8_To_F32_SSE2(
+ 	const uint8_t *restrict src,
+ 	float *restrict dst,
+ 	uint32_t len
+@@ -178,7 +216,7 @@
+     }
+ }
+ 
+-void FAudio_INTERNAL_Convert_S16_To_F32_SSE2(
++MADEIRA_FAUDIO_SSE2_TARGET void FAudio_INTERNAL_Convert_S16_To_F32_SSE2(
+ 	const int16_t *restrict src,
+ 	float *restrict dst,
+ 	uint32_t len
+@@ -221,7 +259,7 @@
+     }
+ }
+ 
+-void FAudio_INTERNAL_Convert_S32_To_F32_SSE2(
++MADEIRA_FAUDIO_SSE2_TARGET void FAudio_INTERNAL_Convert_S32_To_F32_SSE2(
+ 	const int32_t *restrict src,
+ 	float *restrict dst,
+ 	uint32_t len
+@@ -501,7 +539,7 @@
+ /* The SSE2 versions of the resamplers come from @8thMage! */
+ 
+ #if HAVE_SSE2_INTRINSICS
+-void FAudio_INTERNAL_ResampleMono_SSE2(
++MADEIRA_FAUDIO_SSE2_TARGET void FAudio_INTERNAL_ResampleMono_SSE2(
+ 	float *restrict dCache,
+ 	float *restrict resampleCache,
+ 	uint64_t *resampleOffset,
+@@ -672,7 +710,7 @@
+ 	}
+ }
+ 
+-void FAudio_INTERNAL_ResampleStereo_SSE2(
++MADEIRA_FAUDIO_SSE2_TARGET void FAudio_INTERNAL_ResampleStereo_SSE2(
+ 	float *restrict dCache,
+ 	float *restrict resampleCache,
+ 	uint64_t *resampleOffset,
+@@ -1199,7 +1237,7 @@
+ /* The SSE2 version of the amplifier comes from @8thMage! */
+ 
+ #if HAVE_SSE2_INTRINSICS
+-void FAudio_INTERNAL_Amplify_SSE2(
++MADEIRA_FAUDIO_SSE2_TARGET void FAudio_INTERNAL_Amplify_SSE2(
+ 	float* output,
+ 	uint32_t totalSamples,
+ 	float volume
+@@ -1312,7 +1350,7 @@
+ 	return _mm_cvtss_f32(sums);
+ }
+ 
+-void FAudio_INTERNAL_Mix_Generic_SSE2(
++MADEIRA_FAUDIO_SSE2_TARGET void FAudio_INTERNAL_Mix_Generic_SSE2(
+ 	uint32_t toMix,
+ 	uint32_t srcChans,
+ 	uint32_t dstChans,
+--- a/dlls/mmdevapi/main.c
++++ b/dlls/mmdevapi/main.c
+@@ -363,7 +363,19 @@
+ 
+     while (1)
+     {
+-        MIDI_CALL( midi_notify_wait, &params );
++        /* Both outputs are read straight back off this stack, so both are
++         * reset before every call and both default to "stop".  midi_notify_wait
++         * is defined to BLOCK until there is a notification or the driver is
++         * released; a backend that returns immediately without writing *quit
++         * left this loop reading an uninitialised slot, and the loop then
++         * became a busy wait that burned a whole core for the lifetime of the
++         * process -- with notify.send_notify equally uninitialised and able to
++         * send DriverCallback through a garbage function pointer.  Failing
++         * closed costs nothing when the driver does fill them in: every real
++         * one assigns *quit on every return. */
++        quit = TRUE;
++        notify.send_notify = FALSE;
++        if (MIDI_CALL( midi_notify_wait, &params )) break;
+         if (quit) break;
+         if (notify.send_notify) notify_client(&notify);
+     }
+@@ -405,6 +417,9 @@
+ DWORD WINAPI midMessage( UINT id, UINT msg, DWORD_PTR user, DWORD_PTR param1, DWORD_PTR param2 )
+ {
+     struct midi_in_message_params params;
++    /* send_notify is read back whenever the driver reports success, so it is
++     * cleared first for the same reason as in notify_thread: a driver that
++     * leaves it alone must not make us dispatch through uninitialised stack. */
+     struct notify_context notify;
+     UINT err = 0;
+ 
+@@ -420,6 +435,7 @@
+ 
+     do
+     {
++        notify.send_notify = FALSE;
+         MIDI_CALL( midi_in_message, &params );
+         if ((!err || err == ERROR_RETRY) && notify.send_notify) notify_client( &notify );
+     } while (err == ERROR_RETRY);
+@@ -430,7 +446,7 @@
+ DWORD WINAPI modMessage( UINT id, UINT msg, DWORD_PTR user, DWORD_PTR param1, DWORD_PTR param2 )
+ {
+     struct midi_out_message_params params;
+-    struct notify_context notify;
++    struct notify_context notify;   /* see midMessage */
+     UINT err = 0;
+ 
+     TRACE( "%04x %04x %08Ix %08Ix %08Ix\n", id, msg, user, param1, param2 );
+@@ -443,6 +459,7 @@
+     params.err     = &err;
+     params.notify  = &notify;
+ 
++    notify.send_notify = FALSE;
+     MIDI_CALL( midi_out_message, &params );
+     if (!err && notify.send_notify) notify_client( &notify );
+     return err;

@@ -257,8 +257,23 @@ stage_wine_i386() {
     n=$(ls app/Madeira/i386-windows 2>/dev/null | grep -ci '\.dll$' || true)
     if [ "$n" -gt 300 ]; then echo "i386 farm already present ($n DLLs, cache)"; return 0; fi
     export PATH="$(brew --prefix bison)/bin:$(brew --prefix flex)/bin:$PATH"
+    # i386-only Wine patches (the workflow's farm cache key hashes these files too).
+    local p
+    for p in patches/wine-i386-*.patch; do
+        [ -f "$p" ] || continue
+        if git -C wine apply --reverse --check "$R/$p" 2>/dev/null; then
+            echo "already applied: $p"
+        else
+            git -C wine apply "$R/$p" || die "cannot apply $p to wine"
+            echo "applied: $p"
+        fi
+    done
     if build/wine-i386/build.sh; then
         echo "i386 farm: $(ls app/Madeira/i386-windows | wc -l | tr -d ' ') files"
+        # patches/wine-i386-audio-125hz.patch leaves a build tag in the XACT engine
+        grep -aq MADEIRA-FACT app/Madeira/i386-windows/xactengine3_7.dll \
+            && echo "xactengine3_7.dll: FACT streaming fix present" \
+            || echo "WARNING: xactengine3_7.dll lacks the FACT streaming fix"
     else
         cp -f wine/build-i386/madeira-i386-build.log "$LOGS/wine-i386-build.log" 2>/dev/null || true
         echo "WARNING: i386 farm build FAILED -- this IPA cannot run 32-bit games" \
