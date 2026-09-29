@@ -236,7 +236,15 @@ stage_ipa() {
     [ -n "$app" ] || die "Madeira.app not found"
     rm -rf build/ipa && mkdir -p build/ipa/Payload
     cp -R "$app" build/ipa/Payload/
+    # Unsigned builds carry no entitlements. Ad-hoc sign with the app's entitlements
+    # (get-task-allow for StikDebug JIT attach, increased memory limit) so re-signing
+    # tools like Sideloadly/AltStore see and keep them.
+    if [ -z "${TEAM_ID:-}" ]; then
+        codesign --force --sign - --entitlements app/Madeira/Madeira.entitlements build/ipa/Payload/Madeira.app
+        codesign -d --entitlements - build/ipa/Payload/Madeira.app 2>/dev/null | head -20 || true
+    fi
     (cd build/ipa && zip -qry Madeira.ipa Payload)
+    ls -l build/ipa/Madeira.ipa
     echo "IPA: $R/build/ipa/Madeira.ipa (unsigned unless TEAM_ID was set; sign with Sideloadly/AltStore)"
 }
 
