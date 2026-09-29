@@ -100,6 +100,8 @@ stage_freetype() {
 # generated headers. Not documented anywhere in the repo: this is a guess at a
 # plain macOS host configure of the wine fork. Fix here first if it fails.
 stage_host_wine() {
+    export PATH="$(brew --prefix bison)/bin:$(brew --prefix flex)/bin:$PATH"
+    bison --version | head -1
     mkdir -p wine/build-macos && cd wine/build-macos
     [ -f config.status ] || ../configure --enable-win64 --without-x --disable-tests \
         --without-freetype --without-gnutls --without-vulkan
