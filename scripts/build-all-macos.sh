@@ -51,7 +51,7 @@ stage_prereqs() {
     for t in cmake ninja meson python3 curl git wget; do
         command -v $t >/dev/null || brew install $([ $t = meson ] && echo meson || ([ $t = python3 ] && echo python || echo $t))
     done
-    for t in autoconf automake libtool pkg-config nasm ccache bison flex gettext xz; do
+    for t in autoconf automake libtool pkg-config nasm ccache bison flex gettext xz llvm; do
         brew list $t >/dev/null 2>&1 || brew install $t
     done
     # DXMT shaders need the Metal toolchain.
@@ -111,28 +111,43 @@ stage_host_wine() {
     [ -f include/mfobjects.h ] || die "widl headers (include/mfobjects.h) were not generated"
 }
 
-stage_ntdll_unix()  { build/ntdll-unix/build.sh; }
+stage_ntdll_unix() {
+    # dwrite_unixlib reads widl headers from wine/build-arm64ec/include (the PE tree).
+    # When the PE side isn't rebuilt, the host tree's generated headers are the same files.
+    if [ "${BUILD_PE:-0}" != 1 ] && [ ! -e wine/build-arm64ec/include ]; then
+        mkdir -p wine/build-arm64ec && ln -s ../build-macos/include wine/build-arm64ec/include
+    fi
+    build/ntdll-unix/build.sh
+}
 stage_win32u_unix() { build/win32u-unix/build.sh; }
 
 # build.sh only *replaces* objects inside an existing libwineserver.a that is
-# neither tracked nor documented. If there is none, seed one from wine/server so
-# the replace logic has something to work on. Best effort.
+# neither tracked nor documented. If there is none, seed one by compiling the
+# wine/server SOURCES with build.sh's own flags; build.sh then swaps in the
+# iOS-patched objects. A seed failure only matters if build.sh doesn't replace it.
 stage_wineserver() {
+    export PATH="$(brew --prefix llvm)/bin:$PATH"   # llvm-objcopy for the symbol renames
     local base=app/Madeira/libwineserver.a
     if [ ! -f "$base" ] && [ ! -f build/wineserver/obj/libwineserver.a ]; then
-        echo "No base libwineserver.a; seeding from wine/server/*.c"
-        local sdk; sdk=$(xcrun --sdk iphoneos --show-sdk-path) o=build/wineserver/obj/seed
+        echo "No base libwineserver.a; seeding from wine/server"
+        local sdk o=build/wineserver/obj/seed B=build/wineserver W=wine
+        sdk=$(xcrun --sdk iphoneos --show-sdk-path)
         mkdir -p $o
-        for c in wine/server/*.c; do
-            xcrun -sdk iphoneos clang -arch arm64 -isysroot "$sdk" -miphoneos-version-min=17.0 -O2 \
-                -Iwine/include -Iwine/include/wine -Iwine/build-macos/include -Iwine/server \
-                -Ibuild/ntdll-unix/shims -include build/wineserver/config_ios.h -include stdarg.h \
-                -D__WINESRC__ -DWINE_IOS=1 -DBINDIR=\"/usr/local/bin\" -DDATADIR=\"/usr/local/share\" \
-                -Dmain=wineserver_main -Wno-implicit-function-declaration -Wno-int-conversion \
-                -c "$c" -o "$o/$(basename "$c" .c).o" 2>>"$LOGS/wineserver-seed.err" \
-                || echo "  (seed) failed: $c -- see build-logs/wineserver-seed.err"
+        for c in $(sed -n '/^SOURCES/,/^$/p' wine/server/Makefile.in | grep -o '[a-z_0-9]*\.c'); do
+            printf '  seed %s... ' "$c"
+            if xcrun -sdk iphoneos clang -arch arm64 -isysroot "$sdk" -miphoneos-version-min=17.0 -O2 \
+                -I$W/include -I$W/include/wine -I$W/build-macos/include -I$B -I$W/server \
+                -Ibuild/ntdll-unix/shims -Ibuild/madsync -DHAVE_LINUX_NTSYNC_H=1 \
+                -include $B/config_ios.h -include stdarg.h -include $B/unicode_fix.h \
+                -include $B/wineserver_ios_kill.h \
+                -DBINDIR=\"/usr/local/bin\" -DDATADIR=\"/usr/local/share\" \
+                -D__WINESRC__ -DWINE_IOS=1 -Dmain=wineserver_main -Wno-implicit-function-declaration \
+                -c "wine/server/$c" -o "$o/${c%.c}.o" 2>"$o/err-${c%.c}.txt"; then
+                echo OK
+            else
+                echo "FAILED"; head -5 "$o/err-${c%.c}.txt"
+            fi
         done
-        mkdir -p build/wineserver/obj
         ar rcs build/wineserver/obj/libwineserver.a $o/*.o
     fi
     build/wineserver/build.sh
