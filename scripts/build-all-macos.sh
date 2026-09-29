@@ -119,6 +119,22 @@ stage_host_wine() {
     make -j"$JOBS" include/all
     [ -f include/config.h ] || die "wine/build-macos/include/config.h missing"
     [ -f include/mfobjects.h ] || die "widl headers (include/mfobjects.h) were not generated"
+    # Configured --without-gnutls (the host has none for iOS), so config.h defines neither
+    # guard below; dlls/bcrypt/gnutls.c and dlls/secur32/schannel_gnutls.c would compile to
+    # EMPTY objects and the app link would fail on _bcrypt/_secur32_unix_call_funcs.
+    # ntdll-unix links toolchains/gnutls-ios statically and ios_gnutls_shim.h maps
+    # dlopen/dlsym onto a static table, so the soname is only matched, never opened.
+    # (Fix from github.com/bahacan16/madeira-bcd, build-ipa.yml.)
+    grep -q "madeira: gnutls guards" include/config.h || cat >> include/config.h <<'EOF'
+
+/* madeira: gnutls guards (see scripts/build-all-macos.sh, stage_host_wine) */
+#ifndef SONAME_LIBGNUTLS
+#define SONAME_LIBGNUTLS "libgnutls.so.30"
+#endif
+#ifndef HAVE_GNUTLS_CIPHER_INIT
+#define HAVE_GNUTLS_CIPHER_INIT 1
+#endif
+EOF
 }
 
 stage_ntdll_unix() {
@@ -128,6 +144,15 @@ stage_ntdll_unix() {
         mkdir -p wine/build-arm64ec && ln -s ../build-macos/include wine/build-arm64ec/include
     fi
     build/ntdll-unix/build.sh
+    # An #ifdef-guarded unixlib compiles "OK" to an empty object; catch that here rather
+    # than as undefined symbols at the very end of the Xcode link.
+    local s missing=""
+    nm -gU app/Madeira/libntdll_unix.a 2>/dev/null | awk '{print $NF}' | sort -u > "$LOGS/ntdll-syms.txt"
+    for s in bcrypt secur32 crypt32 ws2_32 dwrite; do
+        grep -qx "_${s}_unix_call_funcs" "$LOGS/ntdll-syms.txt" && echo "  OK   ${s}_unix_call_funcs" \
+            || { echo "  MISS ${s}_unix_call_funcs"; missing="$missing $s"; }
+    done
+    [ -z "$missing" ] || die "libntdll_unix.a lacks unix call tables for:$missing"
 }
 stage_win32u_unix() { build/win32u-unix/build.sh; }
 
@@ -227,8 +252,35 @@ stage_pe() {
 stage_app() {
     local sign=(CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="")
     [ -z "${TEAM_ID:-}" ] || sign=(DEVELOPMENT_TEAM="$TEAM_ID" -allowProvisioningUpdates)
+    local rc=0
     xcodebuild -project app/Madeira.xcodeproj -scheme Madeira -configuration Debug \
-        -destination 'generic/platform=iOS' -derivedDataPath build/xcode "${sign[@]}" build
+        -destination 'generic/platform=iOS' -derivedDataPath build/xcode "${sign[@]}" build \
+        > "$LOGS/xcodebuild.log" 2>&1 || rc=$?
+    tail -5 "$LOGS/xcodebuild.log"
+    if [ "$rc" != 0 ]; then
+        # xcodebuild buries the diagnostics under huge compiler invocations, and linker
+        # errors have no "error:" prefix (approach from madeira-bcd's build-ipa.yml).
+        echo "===== compiler errors ====="
+        grep -E "^[^ ].*: (error|fatal error):" "$LOGS/xcodebuild.log" | sort -u | head -30
+        echo "===== linker diagnostics ====="
+        grep -E "Undefined symbol|^ld: |symbol\(s\) not found|referenced from|duplicate symbol" \
+            "$LOGS/xcodebuild.log" | head -40
+        echo "===== failing build commands ====="
+        sed -n '/The following build commands failed/,/failures)/p' "$LOGS/xcodebuild.log" | cut -c1-200 | head -15
+        return "$rc"
+    fi
+
+    # DXMT finds the macdrv entry points with dlsym(RTLD_DEFAULT, ...), so they must be in
+    # the main binary's export trie; if dead-stripped, every D3D11 game renders black with
+    # no error (check from madeira-bcd's build-ipa.yml).
+    local bin sym missing=""
+    bin="$(find build/xcode/Build/Products -maxdepth 3 -path '*Madeira.app/Madeira' -type f | head -1)"
+    xcrun dyld_info -exports "$bin" > "$LOGS/exports.txt" 2>&1 || true
+    for sym in macdrv_functions get_win_data release_win_data \
+               macdrv_view_create_metal_view macdrv_view_get_metal_layer macdrv_view_release_metal_view; do
+        grep -qE "_$sym\$" "$LOGS/exports.txt" && echo "  OK   $sym" || { echo "  MISS $sym"; missing="$missing $sym"; }
+    done
+    [ -z "$missing" ] || die "app binary does not export:$missing (DXMT would render black)"
 }
 
 stage_ipa() {
