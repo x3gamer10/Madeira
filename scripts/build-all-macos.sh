@@ -25,7 +25,7 @@ LLVM_REF="${LLVM_REF:-llvmorg-15.0.7}"   # dxmt README says 15.0.7; BUILDING.md 
 MINGW_VER=20260421
 MINGW_DIR="$R/toolchains/llvm-mingw-$MINGW_VER-ucrt-macos-universal"
 MINGW_SHA=bd85a3975723815cef28dbbd2ca2cb0c926f6b348a12a0453f39f7af273cb3f7
-ALL_STAGES="prereqs submodules toolchain vcruntime licenses gnutls ffmpeg fex-ios freetype host-wine ntdll-unix win32u-unix wineserver llvm-ios dxmt-ios pe app ipa"
+ALL_STAGES="prereqs submodules toolchain vcruntime licenses gnutls ffmpeg fex-ios freetype host-wine ntdll-unix win32u-unix wineserver llvm-ios dxmt-ios wine-i386 pe app ipa"
 STAGES="${STAGES:-$ALL_STAGES}"
 
 say() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
@@ -243,6 +243,32 @@ stage_dxmt_ios() {
     xcrun -sdk iphoneos libtool -static -o build/dxmt-ios/libdxmt_combined.a \
         build/dxmt-ios/obj/*.o toolchains/llvm-ios-build/lib/*.a
     cp build/dxmt-ios/libdxmt_combined.a app/Madeira/
+}
+
+# WoW64 (32-bit x86 games, e.g. Saints Row 2): the i386 Windows farm that
+# app/Madeira/i386-windows must hold. Upstream does not commit it (docs/WOW64.md,
+# "Building"); without it a 32-bit exe fails with "the bundle has no i386-windows"
+# and then an assertion in build_wow64_parameters. The aarch64 half (wow64.dll,
+# wow64win.dll, FEX's xtajit.dll) is committed. CI restores the farm from a cache
+# keyed on the wine/DXMT revisions. A failure here does not stop the IPA: 64-bit
+# games do not need it.
+stage_wine_i386() {
+    local n
+    n=$(ls app/Madeira/i386-windows 2>/dev/null | grep -ci '\.dll$' || true)
+    if [ "$n" -gt 300 ]; then echo "i386 farm already present ($n DLLs, cache)"; return 0; fi
+    export PATH="$(brew --prefix bison)/bin:$(brew --prefix flex)/bin:$PATH"
+    if build/wine-i386/build.sh; then
+        echo "i386 farm: $(ls app/Madeira/i386-windows | wc -l | tr -d ' ') files"
+    else
+        cp -f wine/build-i386/madeira-i386-build.log "$LOGS/wine-i386-build.log" 2>/dev/null || true
+        echo "WARNING: i386 farm build FAILED -- this IPA cannot run 32-bit games" \
+             "(64-bit games are unaffected). Log: build-logs/wine-i386-build.log"
+        grep -E "error:|Error [0-9]" wine/build-i386/madeira-i386-build.log 2>/dev/null | head -30 || true
+        # Leave the folder empty rather than half-filled: a partial farm fails later,
+        # per missing import, instead of at the clear "no i386-windows" message.
+        find app/Madeira/i386-windows -type f ! -name .gitkeep -delete 2>/dev/null || true
+        touch "$LOGS/wine-i386.FAILED"
+    fi
 }
 
 stage_pe() {
