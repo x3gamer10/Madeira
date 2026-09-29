@@ -256,8 +256,12 @@ stage_app() {
     local sign=(CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="")
     [ -z "${TEAM_ID:-}" ] || sign=(DEVELOPMENT_TEAM="$TEAM_ID" -allowProvisioningUpdates)
     local rc=0
+    # ENABLE_DEBUG_DYLIB=NO: since Xcode 15 a Debug build puts the code in
+    # Madeira.debug.dylib behind a stub executable; keep it in the main binary, as an
+    # archive/install build does, so DXMT's dlsym finds the macdrv exports there.
     xcodebuild -project app/Madeira.xcodeproj -scheme Madeira -configuration Debug \
-        -destination 'generic/platform=iOS' -derivedDataPath build/xcode "${sign[@]}" build \
+        -destination 'generic/platform=iOS' -derivedDataPath build/xcode "${sign[@]}" \
+        ENABLE_DEBUG_DYLIB=NO build \
         > "$LOGS/xcodebuild.log" 2>&1 || rc=$?
     tail -5 "$LOGS/xcodebuild.log"
     if [ "$rc" != 0 ]; then
@@ -278,7 +282,9 @@ stage_app() {
     # no error (check from madeira-bcd's build-ipa.yml).
     local bin sym missing=""
     bin="$(find build/xcode/Build/Products -maxdepth 3 -path '*Madeira.app/Madeira' -type f | head -1)"
+    ls -l "$(dirname "$bin")"/Madeira* 2>/dev/null
     xcrun dyld_info -exports "$bin" > "$LOGS/exports.txt" 2>&1 || true
+    echo "dyld_info: $(wc -l < "$LOGS/exports.txt" | tr -d ' ') lines for $bin"
     for sym in macdrv_functions get_win_data release_win_data \
                macdrv_view_create_metal_view macdrv_view_get_metal_layer macdrv_view_release_metal_view; do
         grep -qE "_$sym\$" "$LOGS/exports.txt" && echo "  OK   $sym" || { echo "  MISS $sym"; missing="$missing $sym"; }
