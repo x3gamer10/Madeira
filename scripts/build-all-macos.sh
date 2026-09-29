@@ -40,7 +40,17 @@ run_stage() {
     ( set -e; $fn ) 2>&1 | tee "$LOGS/$s.log"
     local rc=${PIPESTATUS[0]}
     set -e
-    [ "$rc" = 0 ] || die "stage '$s' failed (rc=$rc). Log: build-logs/$s.log"
+    if [ "$rc" != 0 ]; then
+        # The per-file compile loops only print FAILED; show the saved compiler errors.
+        local e o
+        for e in build/*/obj/*.err build/*/obj/err-*.txt build/*/obj/seed/err-*.txt; do
+            [ -s "$e" ] || continue
+            o="${e%.err}.o"; [[ "$e" == *.txt ]] && o="$(dirname "$e")/$(basename "$e" .txt | sed 's/^err-//').o"
+            [ -f "$o" ] && continue
+            echo "----- $e"; grep -m 15 -E "error|Error" "$e" || head -15 "$e"
+        done 2>/dev/null | tee -a "$LOGS/$s.log"
+        die "stage '$s' failed (rc=$rc). Log: build-logs/$s.log"
+    fi
     touch "$LOGS/$s.done"
 }
 
