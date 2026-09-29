@@ -507,7 +507,7 @@ enum StikJITHelper {
         // derives WriteOffset from the real distance), so send it high, where it
         // lived in every run before ml977, and keep the scarce low gap for RX.
         rwAddr = 0x7000000000
-        let kr1 = vm_remap(
+        var kr1 = vm_remap(
             mach_task_self_,
             &rwAddr,
             vm_size_t(poolSize),
@@ -520,6 +520,30 @@ enum StikJITHelper {
             &maxProt,
             VM_INHERIT_NONE
         )
+
+        // On a task whose VA ceiling is 0xfc0000000 (63GB; see virtual_ios.c ml787/ml996)
+        // the 0x7000000000 hint lies above the map's max, and an ANYWHERE search that
+        // starts past the max fails with KERN_NO_SPACE (3) without looking lower. The alias
+        // has no placement requirement of its own, so search again from just above the RX
+        // pool, which the debugger has just placed in a hole that fit it.
+        if kr1 == KERN_NO_SPACE {
+            let hint = vm_address_t(bitPattern: rxPtr) + vm_address_t(poolSize)
+            LogStore.shared.log(String(format: "vm_remap: no space above 0x7000000000 (VA ceiling below it?) — retrying from 0x%lx", Int(hint)))
+            rwAddr = hint
+            kr1 = vm_remap(
+                mach_task_self_,
+                &rwAddr,
+                vm_size_t(poolSize),
+                0,
+                VM_FLAGS_ANYWHERE,
+                mach_task_self_,
+                vm_address_t(bitPattern: rxPtr),
+                0, // copy = false
+                &curProt,
+                &maxProt,
+                VM_INHERIT_NONE
+            )
+        }
 
         guard kr1 == KERN_SUCCESS else {
             LogStore.shared.log("vm_remap failed: \(kr1)", level: .error)
