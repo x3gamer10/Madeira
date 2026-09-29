@@ -187,8 +187,16 @@ stage_llvm_ios() {
         -DCMAKE_OSX_DEPLOYMENT_TARGET=17.0 \
         -DLLVM_HOST_TRIPLE=arm64-apple-ios17.0 -DLLVM_DEFAULT_TARGET_TRIPLE=arm64-apple-ios17.0 \
         -DLLVM_TARGET_ARCH=host -DLLVM_BUILD_TOOLS=Off -DLLVM_BUILD_UTILS=Off \
+        -DLLVM_TOOL_LTO_BUILD=Off -DLLVM_TOOL_REMARKS_SHLIB_BUILD=Off \
         -DLLVM_TABLEGEN="$R/toolchains/llvm-host-build/bin/llvm-tblgen"
-    cmake --build toolchains/llvm-ios-build
+    # Only the static libraries matter; a stray tool/dylib failing to link (libLTO did,
+    # with -z defs) must not throw away an otherwise finished build.
+    cmake --build toolchains/llvm-ios-build -- -k 0 || echo "(some non-library targets failed; checking the libraries)"
+    local l
+    for l in Support Core BitReader BitWriter IRReader AsmParser Analysis TransformUtils; do
+        [ -f "toolchains/llvm-ios-build/lib/libLLVM$l.a" ] || die "libLLVM$l.a was not built"
+    done
+    ls toolchains/llvm-ios-build/lib/*.a | wc -l
 }
 
 stage_dxmt_ios() {
