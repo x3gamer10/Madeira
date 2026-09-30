@@ -13,6 +13,7 @@ set -euo pipefail
 R="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BASE_MANIFEST="${1:?usage: $0 <installed build pe-manifest.txt> [out.zip]}"
 OUT="${2:-$R/build/ipa/madeira-update.zip}"
+mkdir -p "$(dirname "$OUT")" && OUT="$(cd "$(dirname "$OUT")" && pwd)/$(basename "$OUT")"  # zip runs in a temp dir
 NEW_MANIFEST="$R/build-logs/pe-manifest.txt"
 APP="$R/build/ipa/Payload/Madeira.app"
 
