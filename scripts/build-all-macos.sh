@@ -25,7 +25,7 @@ LLVM_REF="${LLVM_REF:-llvmorg-15.0.7}"   # dxmt README says 15.0.7; BUILDING.md 
 MINGW_VER=20260421
 MINGW_DIR="$R/toolchains/llvm-mingw-$MINGW_VER-ucrt-macos-universal"
 MINGW_SHA=bd85a3975723815cef28dbbd2ca2cb0c926f6b348a12a0453f39f7af273cb3f7
-ALL_STAGES="prereqs submodules toolchain vcruntime licenses gnutls ffmpeg fex-ios freetype host-wine ntdll-unix win32u-unix wineserver llvm-ios dxmt-ios wine-i386 wine-aarch64 pe pe-fixes dock app ipa"
+ALL_STAGES="prereqs submodules toolchain vcruntime licenses gnutls ffmpeg fex-ios freetype host-wine ntdll-unix win32u-unix wineserver llvm-ios dxmt-ios wine-i386 wine-aarch64 wine-arm64ec pe pe-fixes dock app ipa"
 STAGES="${STAGES:-$ALL_STAGES}"
 
 say() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
@@ -310,6 +310,53 @@ stage_wine_aarch64() {
         "$MINGW_DIR/bin/aarch64-w64-mingw32-strip" --strip-debug -o "app/Madeira/aarch64-windows/$m.dll" "$B/$t"
         echo "rebuilt aarch64-windows/$m.dll ($(wc -c < "app/Madeira/aarch64-windows/$m.dll" | tr -d ' ') bytes)"
     done
+}
+
+# The ARM64EC ntdll (the one x64 processes such as Madeira Dock's host load) rebuilt
+# from the pinned Wine with patches/wine-arm64ec-*.patch, in place of the tracked
+# prebuilt, with build/wine-pe/build-ntdll.sh's post-processing (strip, then pad to
+# SizeOfImage + 0x50000). Its own tree: wine/build-arm64ec/include is a link to the
+# host tree's (stage_ntdll_unix), so configuring there would overwrite the host
+# config.h. Host tools come from wine/build-macos. Before the patches go in, the
+# unpatched source is built once and compared with the tracked binary, so the log
+# shows whether this tree reproduces it and any difference comes from the patches.
+stage_wine_arm64ec() {
+    compgen -G "patches/wine-arm64ec-*.patch" > /dev/null || { echo "no ARM64EC patches: tracked ntdll.dll kept"; return 0; }
+    export PATH="$(brew --prefix bison)/bin:$(brew --prefix flex)/bin:$MINGW_DIR/bin:$PATH"
+    local B=wine/build-arm64ec-pe t=dlls/ntdll/arm64ec-windows/ntdll.dll
+    local out=app/Madeira/arm64ec-windows/ntdll.dll p pending=0
+    if [ ! -f "$B/config.status" ]; then
+        mkdir -p "$B"
+        (cd "$B" && ../configure --enable-archs=arm64ec --with-wine-tools="$R/wine/build-macos" \
+            --without-x --without-vulkan --without-freetype --without-gnutls --disable-tests) \
+            > "$LOGS/wine-arm64ec-configure.log" 2>&1 \
+            || { tail -40 "$LOGS/wine-arm64ec-configure.log"; die "configuring the ARM64EC tree failed"; }
+    fi
+    grep -q "^$t" "$B/Makefile" || die "$B/Makefile has no rule for $t (no arm64ec compiler at configure?)"
+    for p in patches/wine-arm64ec-*.patch; do
+        git -C wine apply --reverse --check "$R/$p" 2>/dev/null || pending=1
+    done
+    if [ "$pending" = 1 ]; then
+        if make -C "$B" -j"$JOBS" "$t" > "$LOGS/wine-arm64ec-unpatched.log" 2>&1; then
+            { "$MINGW_DIR/bin/arm64ec-w64-mingw32-strip" -o "$LOGS/ntdll-unpatched.dll" "$B/$t" &&
+              python3 tools/pe-sections.py pad-ntdll "$LOGS/ntdll-unpatched.dll" &&
+              python3 tools/pe-sections.py compare "$LOGS/ntdll-unpatched.dll" "$out"; } \
+                || echo "WARNING: could not compare the unpatched ARM64EC ntdll"
+        else
+            grep -E "error|Error" "$LOGS/wine-arm64ec-unpatched.log" | head -30 || true
+            echo "WARNING: the unpatched ARM64EC ntdll did not build; no comparison"
+        fi
+    fi
+    apply_wine_patches patches/wine-arm64ec-*.patch
+    make -C "$B" -j"$JOBS" "$t" > "$LOGS/wine-arm64ec-ntdll.log" 2>&1 \
+        || { grep -E "error|Error" "$LOGS/wine-arm64ec-ntdll.log" | head -30; die "building $t failed"; }
+    "$MINGW_DIR/bin/arm64ec-w64-mingw32-strip" -o "$out.tmp" "$B/$t"
+    python3 tools/pe-sections.py pad-ntdll "$out.tmp"
+    # patches/wine-arm64ec-image-map-guard.patch reads this variable (a wide literal)
+    python3 tools/pe-sections.py has-utf16 "$out.tmp" MADEIRA_IMAGE_MAP_GUARD \
+        || die "the rebuilt ARM64EC ntdll.dll lacks the image-map guard"
+    mv -f "$out.tmp" "$out"
+    echo "rebuilt arm64ec-windows/ntdll.dll ($(wc -c < "$out" | tr -d ' ') bytes, image-map guard present)"
 }
 
 stage_pe() {
