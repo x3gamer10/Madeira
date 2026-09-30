@@ -10,7 +10,7 @@ wineserver by stage wineserver (scripts/build-all-macos.sh).
 
 --- a/server/thread.c
 +++ b/server/thread.c
-@@ -1738,6 +1738,64 @@
+@@ -1738,6 +1738,62 @@
  }
  #endif
  
@@ -40,8 +40,7 @@ wineserver by stage wineserver (scripts/build-all-macos.sh).
 +        const char *e = getenv( "MADEIRA_APC_REQUEUE" );
 +        enabled = !(e && e[0] == '0');
 +        fprintf( stderr, "[apc-requeue] %s (MADEIRA_APC_REQUEUE=0 restores dropping async APCs "
-+                 "for busy threads)
-+", enabled ? "on" : "off" );
++                 "for busy threads)\n", enabled ? "on" : "off" );
 +    }
 +    return enabled;
 +}
@@ -64,8 +63,7 @@ wineserver by stage wineserver (scripts/build-all-macos.sh).
 +    }
 +    count++;
 +    if (count <= 32 || !(count & 1023))
-+        fprintf( stderr, "[apc-requeue] #%u async APC status=%08x for busy thread %04x -> %s %04x
-+",
++        fprintf( stderr, "[apc-requeue] #%u async APC status=%08x for busy thread %04x -> %s %04x\n",
 +                 count, apc->call.async_io.status, thread->id,
 +                 target == thread ? "kept on" : "waiting thread", target->id );
 +    return target;
@@ -75,7 +73,7 @@ wineserver by stage wineserver (scripts/build-all-macos.sh).
  /* queue an existing APC to a given thread */
  static int queue_apc( struct process *process, struct thread *thread, struct thread_apc *apc )
  {
-@@ -1785,7 +1843,17 @@
+@@ -1785,7 +1841,17 @@
          /* send signal for system APCs if needed */
          if (queue == &thread->system_apc && list_empty( queue ) && !is_in_apc_wait( thread ))
          {
