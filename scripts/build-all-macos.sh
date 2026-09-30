@@ -165,6 +165,8 @@ stage_win32u_unix() { build/win32u-unix/build.sh; }
 # iOS-patched objects. A seed failure only matters if build.sh doesn't replace it.
 stage_wineserver() {
     export PATH="$(brew --prefix llvm)/bin:$PATH"   # llvm-objcopy for the symbol renames
+    # compiled from wine/server/thread.c below: async I/O APCs for busy threads
+    apply_wine_patches patches/wine-server-apc-requeue.patch
     local base=app/Madeira/libwineserver.a
     if [ ! -f "$base" ] && [ ! -f build/wineserver/obj/libwineserver.a ]; then
         echo "No base libwineserver.a; seeding from wine/server"
