@@ -25,7 +25,7 @@ LLVM_REF="${LLVM_REF:-llvmorg-15.0.7}"   # dxmt README says 15.0.7; BUILDING.md 
 MINGW_VER=20260421
 MINGW_DIR="$R/toolchains/llvm-mingw-$MINGW_VER-ucrt-macos-universal"
 MINGW_SHA=bd85a3975723815cef28dbbd2ca2cb0c926f6b348a12a0453f39f7af273cb3f7
-ALL_STAGES="prereqs submodules toolchain vcruntime licenses gnutls ffmpeg fex-ios freetype host-wine ntdll-unix win32u-unix wineserver llvm-ios dxmt-ios wine-i386 pe pe-fixes dock app ipa"
+ALL_STAGES="prereqs submodules toolchain vcruntime licenses gnutls ffmpeg fex-ios freetype host-wine ntdll-unix win32u-unix wineserver llvm-ios dxmt-ios wine-i386 wine-aarch64 pe pe-fixes dock app ipa"
 STAGES="${STAGES:-$ALL_STAGES}"
 
 say() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
@@ -245,6 +245,20 @@ stage_dxmt_ios() {
     cp build/dxmt-ios/libdxmt_combined.a app/Madeira/
 }
 
+# Apply Wine patches to the submodule's working tree, each once.
+apply_wine_patches() {
+    local p
+    for p in "$@"; do
+        [ -f "$p" ] || continue
+        if git -C wine apply --reverse --check "$R/$p" 2>/dev/null; then
+            echo "already applied: $p"
+        else
+            git -C wine apply "$R/$p" || die "cannot apply $p to wine"
+            echo "applied: $p"
+        fi
+    done
+}
+
 # WoW64 (32-bit x86 games, e.g. Saints Row 2): the i386 Windows farm that
 # app/Madeira/i386-windows must hold. Upstream does not commit it (docs/WOW64.md,
 # "Building"); without it a 32-bit exe fails with "the bundle has no i386-windows"
@@ -258,16 +272,7 @@ stage_wine_i386() {
     if [ "$n" -gt 300 ]; then echo "i386 farm already present ($n DLLs, cache)"; return 0; fi
     export PATH="$(brew --prefix bison)/bin:$(brew --prefix flex)/bin:$PATH"
     # i386-only Wine patches (the workflow's farm cache key hashes these files too).
-    local p
-    for p in patches/wine-i386-*.patch; do
-        [ -f "$p" ] || continue
-        if git -C wine apply --reverse --check "$R/$p" 2>/dev/null; then
-            echo "already applied: $p"
-        else
-            git -C wine apply "$R/$p" || die "cannot apply $p to wine"
-            echo "applied: $p"
-        fi
-    done
+    apply_wine_patches patches/wine-i386-*.patch
     if build/wine-i386/build.sh; then
         echo "i386 farm: $(ls app/Madeira/i386-windows | wc -l | tr -d ' ') files"
         # patches/wine-i386-audio-125hz.patch leaves a build tag in the XACT engine
@@ -284,6 +289,25 @@ stage_wine_i386() {
         find app/Madeira/i386-windows -type f ! -name .gitkeep -delete 2>/dev/null || true
         touch "$LOGS/wine-i386.FAILED"
     fi
+}
+
+# 64-bit (aarch64) WoW64 PE modules rebuilt from the pinned Wine with
+# patches/wine-aarch64-*.patch, in place of the tracked prebuilt copies (the
+# layout docs/WOW64.md, "Building", step 2 describes). The host tree already has
+# the aarch64 PE rules: its configure finds llvm-mingw's aarch64 compiler. Only
+# the modules a patch touches are rebuilt.
+AARCH64_PE_MODULES="wow64win"
+stage_wine_aarch64() {
+    export PATH="$(brew --prefix bison)/bin:$(brew --prefix flex)/bin:$MINGW_DIR/bin:$PATH"
+    apply_wine_patches patches/wine-aarch64-*.patch
+    local m t B=wine/build-macos
+    for m in $AARCH64_PE_MODULES; do
+        t="dlls/$m/aarch64-windows/$m.dll"
+        grep -q "^$t" "$B/Makefile" || die "$B/Makefile has no rule for $t (no aarch64 PE compiler at configure?)"
+        make -C "$B" -j"$JOBS" "$t" > "$LOGS/wine-aarch64-$m.log" 2>&1             || { grep -E "error|Error" "$LOGS/wine-aarch64-$m.log" | head -30; die "building $t failed"; }
+        "$MINGW_DIR/bin/aarch64-w64-mingw32-strip" --strip-debug -o "app/Madeira/aarch64-windows/$m.dll" "$B/$t"
+        echo "rebuilt aarch64-windows/$m.dll ($(wc -c < "app/Madeira/aarch64-windows/$m.dll" | tr -d ' ') bytes)"
+    done
 }
 
 stage_pe() {

@@ -1,0 +1,37 @@
+Class names that are atoms through the WoW64 user32 thunks.
+
+wow64win added the guest window base to every class-name pointer, including a
+MAKEINTATOM class: the Buffer of the UNICODE_STRING (user32 init_class_name)
+and NtUserCreateWindowEx's last-but-one argument. A 32-bit CreateDialog (class
+#32770 = 0x8002) then reached NtUserCreateWindowEx with B + 0x8002,
+IS_INTRESOURCE() failed and the string read faulted (Postal 2). Both now pass
+an atom through, as get_str_or_atom() already does for the Get/SetProp names.
+Built into app/Madeira/aarch64-windows/wow64win.dll by stage wine-aarch64
+(scripts/build-all-macos.sh).
+
+--- a/dlls/wow64win/wow64win_private.h
++++ b/dlls/wow64win/wow64win_private.h
+@@ -150,7 +150,11 @@
+     if (!str32) return NULL;
+     str->Length = str32->Length;
+     str->MaximumLength = str32->MaximumLength;
+-    str->Buffer = guest_ptr32( str32->Buffer );
++    /* iOS-Madeira: the same atom rule as get_str_or_atom() above. user32 passes a
++     * class given as MAKEINTATOM in Buffer (init_class_name), e.g. CreateDialog's
++     * #32770 = 0x8002: translating it made NtUserCreateWindowEx read a string at
++     * guest base + 0x8002 and fault (Postal 2's startup dialog). */
++    str->Buffer = (str32->Buffer >> 16) ? guest_ptr32( str32->Buffer ) : ULongToPtr( str32->Buffer );
+     return str;
+ }
+ 
+--- a/dlls/wow64win/user.c
++++ b/dlls/wow64win/user.c
+@@ -2074,7 +2074,7 @@
+     void *params = get_ptr( &args );
+     DWORD flags = get_ulong( &args );
+     HINSTANCE client_instance = get_ptr( &args );
+-    const WCHAR *class = get_ptr( &args );
++    const WCHAR *class = get_str_or_atom( &args );  /* the caller's class: may be an atom */
+     BOOL ansi = get_ulong( &args );
+ 
+     UNICODE_STRING class_name, version, window_name;
