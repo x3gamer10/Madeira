@@ -1,5 +1,11 @@
 name: build-ios
-on: workflow_dispatch
+on:
+  workflow_dispatch:
+    inputs:
+      update_base_run:
+        description: "Also make an update pack for the IPA built by this run ID (docs/UPDATES.md)"
+        required: false
+        default: ""
 env:
   LLVM_CACHE_KEY: llvm-ios-15.0.7-v1
 jobs:
@@ -88,3 +94,16 @@ jobs:
           path: |
             build/ipa/Madeira.ipa
             build-logs
+      # Small on its own so a later run can make an update pack against this build.
+      - uses: actions/upload-artifact@v4
+        with: { name: pe-manifest, path: build-logs/pe-manifest.txt }
+      - if: inputs.update_base_run != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_RUN: ${{ inputs.update_base_run }}
+        run: |
+          gh run download "$BASE_RUN" -R "$GITHUB_REPOSITORY" -n pe-manifest -D base-manifest
+          bash scripts/make-update-pack.sh base-manifest/pe-manifest.txt build/ipa/madeira-update.zip
+      - if: inputs.update_base_run != '' && hashFiles('build/ipa/madeira-update.zip') != ''
+        uses: actions/upload-artifact@v4
+        with: { name: madeira-update, path: build/ipa/madeira-update.zip }

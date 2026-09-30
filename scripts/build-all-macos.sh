@@ -350,6 +350,16 @@ stage_ipa() {
     [ -n "$app" ] || die "Madeira.app not found"
     rm -rf build/ipa && mkdir -p build/ipa/Payload
     cp -R "$app" build/ipa/Payload/
+    # Update packs (docs/UPDATES.md): hash every Windows-side file in the bundle and
+    # stamp the manifest's hash into Info.plist as this build's identity. A pack names
+    # the build it was made for, and the app applies it only to that build.
+    local a=build/ipa/Payload/Madeira.app base
+    (cd "$a" && find aarch64-windows arm64ec-windows i386-windows -type f ! -name '.*' -print0 \
+        | xargs -0 shasum -a 256 | LC_ALL=C sort -k2) > "$LOGS/pe-manifest.txt"
+    base="$(shasum -a 256 "$LOGS/pe-manifest.txt" | cut -c1-64)"
+    /usr/libexec/PlistBuddy -c "Delete :MadeiraPEBase" "$a/Info.plist" 2>/dev/null || true
+    /usr/libexec/PlistBuddy -c "Add :MadeiraPEBase string $base" "$a/Info.plist"
+    echo "MadeiraPEBase=$base ($(wc -l < "$LOGS/pe-manifest.txt" | tr -d ' ') files)"
     # Unsigned builds carry no entitlements. Ad-hoc sign with the app's entitlements
     # (get-task-allow for StikDebug JIT attach, increased memory limit) so re-signing
     # tools like Sideloadly/AltStore see and keep them.

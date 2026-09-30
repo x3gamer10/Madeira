@@ -598,13 +598,18 @@ static WORD get_alt_machine( WORD machine )
 static void set_dll_path(void)
 {
     char *p, *path = getenv( "WINEDLLPATH" );
+    /* MADEIRA: an update pack (Documents/madeira-updates, docs/UPDATES.md) is searched
+     * before the bundle, so its PE files replace the bundle's without a reinstall. The
+     * app sets this only when the pack was made for the installed build. */
+    const char *pack = getenv( "MADEIRA_DLL_OVERRIDES" );
     int i, count = 0;
 
     if (path) for (p = path, count = 1; *p; p++) if (*p == ':') count++;
 
-    dll_paths = malloc( (count + 2) * sizeof(*dll_paths) );
+    dll_paths = malloc( (count + 3) * sizeof(*dll_paths) );
     count = 0;
 
+    if (pack && *pack) dll_paths[count++] = strdup( pack );
     if (!build_dir) dll_paths[count++] = dll_dir;
 
     if (path)

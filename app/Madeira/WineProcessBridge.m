@@ -577,6 +577,66 @@ static BOOL madeira_bundle_has_i386(NSString *bundle)
     return access(ntdll.fileSystemRepresentation, R_OK) == 0;
 }
 
+/* Update packs (docs/UPDATES.md). Documents/madeira-updates mirrors the bundle's
+ * aarch64-windows, arm64ec-windows and i386-windows folders with the Windows-side
+ * files a later build changed. Those are data to iOS -- Wine maps them and runs the
+ * JIT pool's copy -- so they can change without a reinstall; the app's own native
+ * code cannot. A pack is used only when its base.txt equals this build's
+ * MadeiraPEBase (Info.plist, stamped by scripts/build-all-macos.sh), so a pack made
+ * for an older IPA is never loaded over a newer one. nil: no pack, or not ours. */
+static NSString *madeira_update_pack(void)
+{
+    static NSString *pack;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+        NSString *dir = [docs stringByAppendingPathComponent:@"madeira-updates"];
+        NSString *base = [NSString stringWithContentsOfFile:[dir stringByAppendingPathComponent:@"base.txt"]
+                                                   encoding:NSUTF8StringEncoding error:nil];
+        if (!base) return;
+        base = [base stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+        NSString *mine = [NSBundle.mainBundle objectForInfoDictionaryKey:@"MadeiraPEBase"];
+        if (!mine.length || ![base isEqualToString:mine]) {
+            dprintf(STDERR_FILENO, "[updates] pack IGNORED: made for build %.12s, this build is %.12s -- "
+                    "delete Madeira/madeira-updates in the Files app\n",
+                    base.UTF8String, mine.length ? mine.UTF8String : "(unstamped)");
+            return;
+        }
+        pack = dir;
+        NSFileManager *fm = NSFileManager.defaultManager;
+        for (NSString *arch in @[ @"aarch64-windows", @"arm64ec-windows", @"i386-windows" ]) {
+            NSArray *files = [fm contentsOfDirectoryAtPath:[dir stringByAppendingPathComponent:arch] error:nil];
+            if (files.count)
+                dprintf(STDERR_FILENO, "[updates] pack active for build %.12s: %lu file(s) in %s\n",
+                        base.UTF8String, (unsigned long)files.count, arch.UTF8String);
+        }
+    });
+    return pack;
+}
+
+/* The names a farm links: the bundle folder's, plus any the pack adds. */
+static NSArray<NSString *> *madeira_farm_names(NSFileManager *fm, NSString *bundleDir, NSString *arch)
+{
+    NSMutableOrderedSet<NSString *> *names =
+        [NSMutableOrderedSet orderedSetWithArray:[fm contentsOfDirectoryAtPath:bundleDir error:nil] ?: @[]];
+    NSString *pack = madeira_update_pack();
+    if (pack)
+        for (NSString *f in [fm contentsOfDirectoryAtPath:[pack stringByAppendingPathComponent:arch] error:nil])
+            if (![f hasPrefix:@"."]) [names addObject:f];
+    return names.array;
+}
+
+/* Where a farm link points: the pack's copy of arch/name when it has one. */
+static NSString *madeira_farm_source(NSString *bundleDir, NSString *arch, NSString *name)
+{
+    NSString *pack = madeira_update_pack();
+    if (pack) {
+        NSString *p = [[pack stringByAppendingPathComponent:arch] stringByAppendingPathComponent:name];
+        if (access(p.fileSystemRepresentation, R_OK) == 0) return p;
+    }
+    return [bundleDir stringByAppendingPathComponent:name];
+}
+
 /* C:\windows\syswow64: the i386 farm, the Windows name for this pattern. A
  * 32-bit process's system32 is redirected here, and the unix loader's
  * machine -> directory mapping looks here for the 32-bit ntdll, kernel32 and
@@ -589,13 +649,13 @@ static void madeira_link_syswow64(NSFileManager *fm, NSString *prefix, NSString 
     int linked = 0;
 
     [fm createDirectoryAtPath:farmDir withIntermediateDirectories:YES attributes:nil error:nil];
-    for (NSString *f in [fm contentsOfDirectoryAtPath:source error:nil])
+    for (NSString *f in madeira_farm_names(fm, source, @"i386-windows"))
     {
         if ([f hasPrefix:@"."]) continue;
         NSString *dst = [farmDir stringByAppendingPathComponent:f];
         [fm removeItemAtPath:dst error:nil];  /* self-heal stale links on reinstall */
         if ([fm createSymbolicLinkAtPath:dst
-                     withDestinationPath:[source stringByAppendingPathComponent:f] error:nil])
+                     withDestinationPath:madeira_farm_source(source, @"i386-windows", f) error:nil])
             linked++;
     }
     dprintf(STDERR_FILENO, "[WineProc] Farm syswow64: %d links -> i386-windows\n", linked);
@@ -618,7 +678,7 @@ static void madeira_link_syswow64_wbem(NSFileManager *fm, NSString *prefix, NSSt
     for (size_t i = 0; i < sizeof(wbem) / sizeof(wbem[0]); i++)
     {
         NSString *n = [NSString stringWithUTF8String:wbem[i]];
-        NSString *src = [source stringByAppendingPathComponent:n];
+        NSString *src = madeira_farm_source(source, @"i386-windows", n);
         NSString *dst = [dir stringByAppendingPathComponent:n];
         [fm removeItemAtPath:dst error:nil];
         if (![fm fileExistsAtPath:src]) continue;
@@ -731,8 +791,8 @@ static void madeira_seed_winsxs_x86(NSFileManager *fm, NSString *prefix, NSStrin
     {
         const struct sxs_assembly *def = &asms[a];
         const char *body = a == 0 ? comctl32_body : NULL;
-        NSString *first = [source stringByAppendingPathComponent:
-                           [NSString stringWithUTF8String:def->files[0].in_farm]];
+        NSString *first = madeira_farm_source(source, @"i386-windows",
+                                              [NSString stringWithUTF8String:def->files[0].in_farm]);
         if (![fm fileExistsAtPath:first])
         {
             dprintf(STDERR_FILENO, "[WineProc] winsxs: x86 %s skipped, i386-windows has no %s\n",
@@ -759,8 +819,8 @@ static void madeira_seed_winsxs_x86(NSFileManager *fm, NSString *prefix, NSStrin
         BOOL ok = YES;
         for (size_t f = 0; f < sizeof(def->files) / sizeof(def->files[0]) && def->files[f].in_assembly; f++)
         {
-            NSString *src = [source stringByAppendingPathComponent:
-                             [NSString stringWithUTF8String:def->files[f].in_farm]];
+            NSString *src = madeira_farm_source(source, @"i386-windows",
+                                                [NSString stringWithUTF8String:def->files[f].in_farm]);
             NSString *link = [asmDir stringByAppendingPathComponent:
                               [NSString stringWithUTF8String:def->files[f].in_assembly]];
             [fm removeItemAtPath:link error:nil];  /* the bundle path changes on reinstall */
@@ -848,6 +908,10 @@ static void *wine_process_thread(void *arg) {
             NSString *bundlePath = [[NSBundle mainBundle] bundlePath];
             setenv("WINEDLLPATH", bundlePath.UTF8String, 1);
             LOG("WINEDLLPATH=%{public}s", bundlePath.UTF8String);
+            // An update pack for this build is searched first (loader_ios.c set_dll_path).
+            NSString *pack = madeira_update_pack();
+            if (pack) setenv("MADEIRA_DLL_OVERRIDES", pack.fileSystemRepresentation, 1);
+            else unsetenv("MADEIRA_DLL_OVERRIDES");
         }
 
         /* Wine trace channels.
@@ -1177,10 +1241,11 @@ static void *wine_process_thread(void *arg) {
 
             [fm createDirectoryAtPath:sys32Dir withIntermediateDirectories:YES attributes:nil error:nil];
 
-            NSArray *dlls = [fm contentsOfDirectoryAtPath:dllSource error:nil];
+            NSString *subdir = [NSString stringWithUTF8String:bundle_subdir];
+            NSArray *dlls = madeira_farm_names(fm, dllSource, subdir);
             int linked = 0;
             for (NSString *dll in dlls) {
-                NSString *src = [dllSource stringByAppendingPathComponent:dll];
+                NSString *src = madeira_farm_source(dllSource, subdir, dll);
                 NSString *dst = [sys32Dir stringByAppendingPathComponent:dll];
                 // Remove stale symlinks and re-create (bundle path changes on reinstall)
                 [fm removeItemAtPath:dst error:nil];
@@ -1199,7 +1264,8 @@ static void *wine_process_thread(void *arg) {
             {
                 const char *other_subdir = use_arm64ec ? "aarch64-windows" : "arm64ec-windows";
                 NSString *otherSource = [bundlePath stringByAppendingPathComponent:[NSString stringWithUTF8String:other_subdir]];
-                NSArray *others = [fm contentsOfDirectoryAtPath:otherSource error:nil];
+                NSString *otherArch = [NSString stringWithUTF8String:other_subdir];
+                NSArray *others = madeira_farm_names(fm, otherSource, otherArch);
                 int crossLinked = 0;
                 for (NSString *f in others) {
                     NSString *dst = [sys32Dir stringByAppendingPathComponent:f];
@@ -1215,7 +1281,7 @@ static void *wine_process_thread(void *arg) {
                     // from Wine's dir enumeration. Clear then recreate, like
                     // the main pass does.
                     [fm removeItemAtPath:dst error:nil];
-                    NSString *src = [otherSource stringByAppendingPathComponent:f];
+                    NSString *src = madeira_farm_source(otherSource, otherArch, f);
                     if ([fm createSymbolicLinkAtPath:dst withDestinationPath:src error:nil])
                         crossLinked++;
                 }
@@ -1240,12 +1306,13 @@ static void *wine_process_thread(void *arg) {
                     NSString *archSource = [bundlePath stringByAppendingPathComponent:
                         [NSString stringWithUTF8String:farms[i].arch]];
                     [fm createDirectoryAtPath:farmDir withIntermediateDirectories:YES attributes:nil error:nil];
-                    NSArray *files = [fm contentsOfDirectoryAtPath:archSource error:nil];
+                    NSString *arch = [NSString stringWithUTF8String:farms[i].arch];
+                    NSArray *files = madeira_farm_names(fm, archSource, arch);
                     int farmLinked = 0;
                     for (NSString *f in files) {
                         NSString *dst = [farmDir stringByAppendingPathComponent:f];
                         [fm removeItemAtPath:dst error:nil];  // self-heal stale links on reinstall
-                        NSString *src = [archSource stringByAppendingPathComponent:f];
+                        NSString *src = madeira_farm_source(archSource, arch, f);
                         if ([fm createSymbolicLinkAtPath:dst withDestinationPath:src error:nil])
                             farmLinked++;
                     }
