@@ -25,7 +25,7 @@ LLVM_REF="${LLVM_REF:-llvmorg-15.0.7}"   # dxmt README says 15.0.7; BUILDING.md 
 MINGW_VER=20260421
 MINGW_DIR="$R/toolchains/llvm-mingw-$MINGW_VER-ucrt-macos-universal"
 MINGW_SHA=bd85a3975723815cef28dbbd2ca2cb0c926f6b348a12a0453f39f7af273cb3f7
-ALL_STAGES="prereqs submodules toolchain vcruntime licenses gnutls ffmpeg fex-ios freetype host-wine ntdll-unix win32u-unix wineserver llvm-ios dxmt-ios wine-i386 pe dock app ipa"
+ALL_STAGES="prereqs submodules toolchain vcruntime licenses gnutls ffmpeg fex-ios freetype host-wine ntdll-unix win32u-unix wineserver llvm-ios dxmt-ios wine-i386 pe pe-fixes dock app ipa"
 STAGES="${STAGES:-$ALL_STAGES}"
 
 say() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
@@ -291,6 +291,11 @@ stage_pe() {
     build/fex-arm64ec/build.sh
     build/wine-pe/build-ntdll.sh
     build/madeira-d3d12/build-pe.sh
+}
+
+# Binary fixes to the tracked prebuilt PE modules (each script says what and why).
+stage_pe_fixes() {
+    python3 tools/patch-xtajit-cpuid.py
 }
 
 # Madeira Dock (docs/MADEIRA_DOCK.md): dockhost.exe is a gitignored build output;
