@@ -1303,11 +1303,20 @@ static void *wine_process_thread(void *arg) {
                 int crossLinked = 0;
                 for (NSString *f in others) {
                     NSString *dst = [sys32Dir stringByAppendingPathComponent:f];
+                    NSString *src = madeira_farm_source(otherSource, otherArch, f);
                     // fileExistsAtPath FOLLOWS symlinks: YES means the session
                     // (main) pass already linked this name to a resolvable
-                    // file — that arch wins, leave it.
-                    if ([fm fileExistsAtPath:dst]) continue;
-                    // NO means absent OR a stale/dangling symlink left by a
+                    // file — that arch wins, leave it. A link this pass made on
+                    // an earlier run (it ends in <other arch>/<name>) is moved
+                    // when an update pack starts or stops providing the file:
+                    // otherwise a pack could never replace e.g. dockhost.exe.
+                    if ([fm fileExistsAtPath:dst]) {
+                        NSString *cur = [fm destinationOfSymbolicLinkAtPath:dst error:nil];
+                        if (!cur || [cur isEqualToString:src] ||
+                            ![cur hasSuffix:[@"/" stringByAppendingString:[otherArch stringByAppendingPathComponent:f]]])
+                            continue;
+                    }
+                    // Otherwise absent OR a stale/dangling symlink left by a
                     // previous install (bundle UUID changed on reinstall).
                     // createSymbolicLink fails with EEXIST on a dangling link
                     // that still occupies the path — which silently left the
@@ -1315,7 +1324,6 @@ static void *wine_process_thread(void *arg) {
                     // from Wine's dir enumeration. Clear then recreate, like
                     // the main pass does.
                     [fm removeItemAtPath:dst error:nil];
-                    NSString *src = madeira_farm_source(otherSource, otherArch, f);
                     if ([fm createSymbolicLinkAtPath:dst withDestinationPath:src error:nil])
                         crossLinked++;
                 }

@@ -374,8 +374,26 @@ stage_pe_fixes() {
 # Madeira Dock (docs/MADEIRA_DOCK.md): dockhost.exe is a gitignored build output;
 # without it the app has no Dock button and the library no Steam section.
 stage_dock() {
+    # patches/madeira-dock-*.patch: the host's source changes this tree carries
+    # ahead of the submodule pin (each patch says where it comes from).
+    local p
+    for p in patches/madeira-dock-*.patch; do
+        [ -f "$p" ] || continue
+        if git -C research/madeira-dock apply --reverse --check "$R/$p" 2>/dev/null; then
+            echo "already applied: $p"
+        else
+            git -C research/madeira-dock apply "$R/$p" || die "cannot apply $p to research/madeira-dock"
+            echo "applied: $p"
+        fi
+    done
     build/madeira-dock/build.sh
     [ -f app/Madeira/arm64ec-windows/dockhost.exe ] || die "dockhost.exe was not staged"
+    # patches/madeira-dock-licence-wait.patch makes the poll pause alertable
+    if [ -f patches/madeira-dock-licence-wait.patch ]; then
+        grep -aq SleepEx app/Madeira/arm64ec-windows/dockhost.exe \
+            || die "dockhost.exe lacks the alertable poll pause (SleepEx)"
+        echo "dockhost.exe: alertable poll pause present"
+    fi
 }
 
 stage_app() {
