@@ -141,6 +141,8 @@ EOF
 }
 
 stage_ntdll_unix() {
+    # patches/wine-nsi-*.patch: ndis.c is compiled into the unix side (nsi_ndis_ios.c)
+    apply_wine_patches patches/wine-nsi-*.patch
     # dwrite_unixlib reads widl headers from wine/build-arm64ec/include (the PE tree).
     # When the PE side isn't rebuilt, the host tree's generated headers are the same files.
     if [ "${BUILD_PE:-0}" != 1 ] && [ ! -e wine/build-arm64ec/include ]; then
@@ -312,19 +314,28 @@ stage_wine_aarch64() {
     done
 }
 
-# The ARM64EC ntdll (the one x64 processes such as Madeira Dock's host load) rebuilt
-# from the pinned Wine with patches/wine-arm64ec-*.patch, in place of the tracked
-# prebuilt, with build/wine-pe/build-ntdll.sh's post-processing (strip, then pad to
-# SizeOfImage + 0x50000). Its own tree: wine/build-arm64ec/include is a link to the
-# host tree's (stage_ntdll_unix), so configuring there would overwrite the host
-# config.h. Host tools come from wine/build-macos. Before the patches go in, the
-# unpatched source is built once and compared with the tracked binary, so the log
-# shows whether this tree reproduces it and any difference comes from the patches.
+# ARM64EC modules (the ones x64 processes such as Madeira Dock's host load) rebuilt
+# from the pinned Wine with patches/wine-arm64ec-*.patch and patches/wine-nsi-*.patch,
+# in place of the tracked prebuilts. Each entry is module:post:marker -- post "pad"
+# is build/wine-pe/build-ntdll.sh's (strip, then pad to SizeOfImage + 0x50000), else
+# strip only; marker is a wide literal a patch adds, checked in the result. Its own
+# tree: wine/build-arm64ec/include is a link to the host tree's (stage_ntdll_unix),
+# so configuring there would overwrite the host config.h. Host tools come from
+# wine/build-macos. Before the patches go in (the NSI one is already in, for
+# stage_ntdll_unix, and is taken out for this), each module is built once from the
+# unpatched source and compared with the tracked binary, so the log shows whether
+# this tree reproduces it and any difference comes from the patches.
+ARM64EC_PE_MODULES="ntdll:pad:MADEIRA_IMAGE_MAP_GUARD nsi::MADEIRA_NSI_DEVICE_CACHE"
+arm64ec_finish() {  # module post built-dll out
+    "$MINGW_DIR/bin/arm64ec-w64-mingw32-strip" -o "$4" "$3" || return 1
+    [ "$2" != pad ] || python3 tools/pe-sections.py pad-ntdll "$4"
+}
 stage_wine_arm64ec() {
-    compgen -G "patches/wine-arm64ec-*.patch" > /dev/null || { echo "no ARM64EC patches: tracked ntdll.dll kept"; return 0; }
+    local patches=() p e m post marker t out
+    for p in patches/wine-arm64ec-*.patch patches/wine-nsi-*.patch; do [ -f "$p" ] && patches+=("$p"); done
+    [ ${#patches[@]} -gt 0 ] || { echo "no ARM64EC patches: tracked modules kept"; return 0; }
     export PATH="$(brew --prefix bison)/bin:$(brew --prefix flex)/bin:$MINGW_DIR/bin:$PATH"
-    local B=wine/build-arm64ec-pe t=dlls/ntdll/arm64ec-windows/ntdll.dll
-    local out=app/Madeira/arm64ec-windows/ntdll.dll p pending=0
+    local B=wine/build-arm64ec-pe
     if [ ! -f "$B/config.status" ]; then
         mkdir -p "$B"
         (cd "$B" && ../configure --enable-archs=arm64ec --with-wine-tools="$R/wine/build-macos" \
@@ -332,31 +343,43 @@ stage_wine_arm64ec() {
             > "$LOGS/wine-arm64ec-configure.log" 2>&1 \
             || { tail -40 "$LOGS/wine-arm64ec-configure.log"; die "configuring the ARM64EC tree failed"; }
     fi
-    grep -q "^$t" "$B/Makefile" || die "$B/Makefile has no rule for $t (no arm64ec compiler at configure?)"
-    for p in patches/wine-arm64ec-*.patch; do
-        git -C wine apply --reverse --check "$R/$p" 2>/dev/null || pending=1
+    for e in $ARM64EC_PE_MODULES; do
+        m="${e%%:*}"; t="dlls/$m/arm64ec-windows/$m.dll"
+        grep -q "^$t" "$B/Makefile" || die "$B/Makefile has no rule for $t (no arm64ec compiler at configure?)"
     done
-    if [ "$pending" = 1 ]; then
-        if make -C "$B" -j"$JOBS" "$t" > "$LOGS/wine-arm64ec-unpatched.log" 2>&1; then
-            { "$MINGW_DIR/bin/arm64ec-w64-mingw32-strip" -o "$LOGS/ntdll-unpatched.dll" "$B/$t" &&
-              python3 tools/pe-sections.py pad-ntdll "$LOGS/ntdll-unpatched.dll" &&
-              python3 tools/pe-sections.py compare "$LOGS/ntdll-unpatched.dll" "$out"; } \
-                || echo "WARNING: could not compare the unpatched ARM64EC ntdll"
-        else
-            grep -E "error|Error" "$LOGS/wine-arm64ec-unpatched.log" | head -30 || true
-            echo "WARNING: the unpatched ARM64EC ntdll did not build; no comparison"
+    # Take every patch out; on a first pass (some patch was not in yet) build and compare.
+    local reversed=0
+    for p in "${patches[@]}"; do
+        if git -C wine apply --reverse --check "$R/$p" 2>/dev/null; then
+            git -C wine apply --reverse "$R/$p" && reversed=$((reversed + 1))
         fi
+    done
+    if [ "$reversed" -lt ${#patches[@]} ]; then
+        for e in $ARM64EC_PE_MODULES; do
+            IFS=: read -r m post marker <<< "$e"
+            t="dlls/$m/arm64ec-windows/$m.dll"
+            if make -C "$B" -j"$JOBS" "$t" > "$LOGS/wine-arm64ec-$m-unpatched.log" 2>&1 &&
+               arm64ec_finish "$m" "$post" "$B/$t" "$LOGS/$m-unpatched.dll"; then
+                echo "== $m.dll, unpatched source vs the tracked binary:"
+                python3 tools/pe-sections.py compare "$LOGS/$m-unpatched.dll" "app/Madeira/arm64ec-windows/$m.dll" || true
+            else
+                grep -E "error|Error" "$LOGS/wine-arm64ec-$m-unpatched.log" | head -30 || true
+                echo "WARNING: the unpatched ARM64EC $m.dll did not build; no comparison"
+            fi
+        done
     fi
-    apply_wine_patches patches/wine-arm64ec-*.patch
-    make -C "$B" -j"$JOBS" "$t" > "$LOGS/wine-arm64ec-ntdll.log" 2>&1 \
-        || { grep -E "error|Error" "$LOGS/wine-arm64ec-ntdll.log" | head -30; die "building $t failed"; }
-    "$MINGW_DIR/bin/arm64ec-w64-mingw32-strip" -o "$out.tmp" "$B/$t"
-    python3 tools/pe-sections.py pad-ntdll "$out.tmp"
-    # patches/wine-arm64ec-image-map-guard.patch reads this variable (a wide literal)
-    python3 tools/pe-sections.py has-utf16 "$out.tmp" MADEIRA_IMAGE_MAP_GUARD \
-        || die "the rebuilt ARM64EC ntdll.dll lacks the image-map guard"
-    mv -f "$out.tmp" "$out"
-    echo "rebuilt arm64ec-windows/ntdll.dll ($(wc -c < "$out" | tr -d ' ') bytes, image-map guard present)"
+    apply_wine_patches "${patches[@]}"
+    for e in $ARM64EC_PE_MODULES; do
+        IFS=: read -r m post marker <<< "$e"
+        t="dlls/$m/arm64ec-windows/$m.dll"; out="app/Madeira/arm64ec-windows/$m.dll"
+        make -C "$B" -j"$JOBS" "$t" > "$LOGS/wine-arm64ec-$m.log" 2>&1 \
+            || { grep -E "error|Error" "$LOGS/wine-arm64ec-$m.log" | head -30; die "building $t failed"; }
+        arm64ec_finish "$m" "$post" "$B/$t" "$out.tmp" || die "post-processing $t failed"
+        python3 tools/pe-sections.py has-utf16 "$out.tmp" "$marker" \
+            || die "the rebuilt ARM64EC $m.dll lacks $marker (its patch did not take)"
+        mv -f "$out.tmp" "$out"
+        echo "rebuilt arm64ec-windows/$m.dll ($(wc -c < "$out" | tr -d ' ') bytes, $marker present)"
+    done
 }
 
 stage_pe() {
