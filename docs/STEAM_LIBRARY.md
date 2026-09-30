@@ -17,21 +17,37 @@ record writer).
 ## What you see
 
 In the library, the **Steam** section (`docs/LIBRARY.md`, "Steam setup") lists
-two kinds of game together: the games Steam has installed in the prefix, and
-the account's owned games that are not installed yet. Installed games come
-first. Each card shows the game's artwork, its state (**Madeira Dock**,
-**Not installed**, **Update available**, **Downloading 42%**, **Paused**,
-**Download failed**) and, when Steam knows it, the playtime. **Refresh** reads
-the install records again and fetches the library again.
+the games Steam has installed in the prefix under its title, with the games
+being downloaded first, and the account's owned games that are not installed
+yet under **Not installed**; the games you added follow under **Other games**.
+Each card shows the game's artwork, its pills and, when Steam knows it, the
+playtime. An installed game has the pills of any library game: **32-bit** or
+**64-bit**, its graphics API (**OpenGL**, **D3D9**, **D3D11**, ...; named only
+when exactly one is found) and its install size, plus **Update** when Steam has
+a newer build. Any other game shows its state: **Not installed**, **Not fully
+installed**, **Waiting**, **Downloading 42%**, **Paused** or **Download
+failed**. Pull down on the library to read the install records again and fetch
+the library again.
+
+The bits and graphics API are those of the program **Start with: The game**
+would start (below): the program picked there, else Steam's launch
+configuration, else the install folder's only program. They are read off the
+main thread once per install folder, build and picked program (again when
+Steam's launch configuration is cached, and a day later while no program is
+known, for example offline without a cached configuration, when the card shows
+only the size) and kept on the game's library entry; the size is the install
+record's `SizeOnDisk`.
+`[steam-games] metadata` logs the App ID, bits and API.
 
 **An installed game** opens its **Game details** page, the library's own page
 (`docs/LIBRARY.md`, "Game details"), as in the fork. The game is a library
-entry (`LibraryEntry.steamAppID`), made from Steam's install record the first
-time it is opened or when its download finishes, so it keeps its own settings.
+entry (`LibraryEntry.steamAppID`), made from Steam's install record when its
+card first reads its pills, when it is first opened or when its download
+finishes, so it keeps its own settings.
 The page has, in this order:
 
-- the header: artwork (Steam's, or a chosen cover), title, install size,
-  Steam's playtime, and **Play**;
+- the header: artwork (Steam's, or a chosen cover), title, its bits, graphics
+  API and install size, Steam's playtime, and **Play**;
 - **Library details**: title, **Choose cover image**, **Use Steam artwork**;
 - **Steam**: **Start with** Madeira Dock (the default) or **The game** (below);
   under Madeira Dock, **Smaller JIT pool (512 MB) for this launch** (Dock's
@@ -51,7 +67,9 @@ settings apply to the session (the in-game menu saves changes back to the
 entry). The profile never replaces what Dock starts. Play is refused, with the
 reason, while an update runs, before Steam marks the game fully installed,
 without Valve's client components or without a sign-in. Launch arguments are
-not offered: Dock starts Steam's own launch option.
+not offered: Dock starts Steam's own launch option. The session keeps Dock's
+starting screen until the game's own window is shown (`docs/MADEIRA_DOCK.md`,
+"Starting screen").
 
 **Start with: The game** starts the game's own program in Wine, without Steam
 or Madeira Dock, like a game added to the library. It suits games that run

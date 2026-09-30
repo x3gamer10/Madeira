@@ -161,6 +161,80 @@ arguments are not supported.
    only Valve's own later success starts the game, and a session that is
    really playing elsewhere still fails with its own message.
 
+## Starting screen
+
+A Dock start from the library (Settings › Steam › Madeira Dock, or Play on a
+Steam game's Game details page) is a desktop session, and the library's
+starting screen used to end on the desktop's first GDI frame: explorer's
+windows and the host's console window, seconds before the game. The user saw
+the Wine desktop instead of the game. Now (`DockStartScreen.swift`) the
+starting screen of a Dock start shows the game's Steam cover and background
+art (public store artwork by App ID), its title, a spinner, a status line
+with the seconds so far, and one row of round glyph buttons (their words are
+VoiceOver labels): **Close session** once Dock has stopped, **Show live log**,
+and **Show desktop** while the desktop is held back. It stays until the
+game's own window is shown.
+
+The status line follows the furthest stage in the host's report
+(`DockStartStatus`, read once a second):
+
+| Report | Status line |
+|---|---|
+| nothing yet | "Starting Madeira Dock…" ("Still starting Madeira Dock…" after 30 s) |
+| one-time installs running | the program running now, and any that failed |
+| one-time installs ended (`[dock-installers] end`) | "One-time installs finished: N of M succeeded." and the failed ones, then "Starting Madeira Dock…" (late 30 s after the installs' end) |
+| `probe-start-bits` | "Loading Steam…" |
+| `session-native-token-submitted` or `session-logon-start-result` | "Signing in to Steam…" |
+| `session-authenticated-online=1` | "Signed in. Waiting for Steam to confirm this game's license…" |
+| `session-requested-app-listed=1` | "License confirmed. Steam is starting the game…" |
+| `ceg-scm`, `ceg-request-busy` or `ceg-request` without `ceg-result` | "Steam is preparing this game's executable…" |
+| `launch-client-error=0` | "The game is starting. Waiting for its window…" |
+
+Steam's own waits come first: content the game needs (`launch-update-wait`),
+the game's configuration right after sign-in (`launch-config-wait` with 22 or
+23), and Steam's other session still counted as playing (35). The host
+reports only numbers; the words are the app's. When the host reports a
+result while the starting screen is up, the screen says "Madeira Dock
+stopped" with the report's words (the host waits for the game it started, so
+a result before any game window means the game did not start).
+
+**Which window is the game's.** Winios keeps a census of the desktop's
+top-level windows while a Dock start's starting screen is up: per window,
+whether it is shown, its size, whether it has put a frame on screen (a GDI
+frame or a D3D swapchain of its own), and the owning process with its
+executable path, read once per process from the Wine server by process id.
+The app classes the owner by where the program lives on drive C, never by
+its name:
+
+| Owner's executable | Class | Effect |
+|---|---|---|
+| under `C:\windows\` | helper | never the game: Wine's shell, services and console hosts, msiexec, and the Dock host itself |
+| under the Steam client's folder, outside its `steamapps` library | client | a shown, drawn dialog (240x120 or larger) may need the user |
+| anywhere else | other | the game's (or its own launcher's) once shown, drawn and 160x120 or larger |
+| unreadable | unknown | the game's only when D3D frames reached the screen |
+
+A window first shown before the host started (its first report field,
+`probe-start-bits`) belongs to the one-time installs, which run before the
+host: it is never the game's, and a dialog of it may need the user (a failed
+installer can wait for OK). A window that may need the user and stays up for
+2 s reveals the desktop; 4 s after it is gone the starting screen returns, at
+most six times. **Show desktop** reveals the desktop for good. The game's
+window ends the starting screen in every case. `[steam-launch-view]` logs the
+hold, scene changes (window size and owner class, never a path) and reveals.
+
+**A game window born minimized.** Some games show their main window minimized
+the first time (parked at -32000,-32000). On Windows the taskbar brings it
+back; the desktop here has none, so the starting screen waited for a window
+that never appeared. While the census runs, a top-level window whose first
+show is minimized gets what a taskbar click sends, once: `WM_SYSCOMMAND` /
+`SC_RESTORE`, posted, and its own thread then brings it to the front from its
+event pump (a fullscreen game pauses without focus). A window that was shown
+and minimized itself later is left alone. `[born-minimized]` logs both steps.
+
+The census runs only for a Dock start's starting screen: with it off, each
+hook costs one atomic load, and nothing else changes for any other session,
+direct launch or desktop.
+
 ## One-time installs
 
 A game's Steam install script (`installscript.vdf`) lists programs Steam's
@@ -214,8 +288,9 @@ tasks, before the step Dock asks it for, so on the Dock route nothing ran them.
    bundle without 32-bit Windows DLLs has nothing to copy (`no-source`).
 
 The plan, each program's fate and the results are logged as
-`[dock-installers]`; the Dock sheet's status shows the plan and the running
-program. `madeira-dock-installs.json` next to the registry files holds the
+`[dock-installers]`; the Dock sheet's status and the starting screen show the
+plan, the running program and, once the batch ended, how many succeeded.
+`madeira-dock-installs.json` next to the registry files holds the
 batch's program list and each game's choice.
 
 If the install record lists per-user custom executables (`CheckGuid`), Dock
@@ -243,6 +318,11 @@ never asks. The preparation is Valve's; Dock does not touch the files.
 | `MADEIRA_DOCK_INSTALL_SCM` | on | `0`: the batch records "services off" instead of starting the service manager (also read by the host's `--start-services`) |
 | `MADEIRA_DOCK_INSTALL_SERVER_SYNC` | on | `0`: a start that runs installers keeps madsync and leaves the service step out |
 | `MADEIRA_DOTNET_FUSION` | on | `0`: never place `fusion.dll` in the .NET 2.0 folder |
+| `MADEIRA_DOCK_HIDE_DESKTOP` | on | `0`: a Dock start's starting screen ends on the desktop's first frame, as before (no census) |
+| `MADEIRA_DOCK_AUTO_REVEAL` | on | `0`: a window that may need the user never reveals the desktop by itself (Show desktop still does) |
+| `MADEIRA_DOCK_INSTALLER_REVEAL` | on | `0`: a one-time installer's dialog never reveals the desktop by itself |
+| `MADEIRA_DOCK_STATUS` | on | `0`: the starting screen does not watch the host's result |
+| `MADEIRA_RESTORE_BORN_MINIMIZED` | on | `0`: while the census runs, a window first shown minimized stays minimized |
 
 ## 64-bit and runtime impact
 
@@ -256,9 +336,9 @@ other session sets it, and an engine without the switch ignores it.
 
 One-time installs change the engine for one session only: a Dock start that
 runs a game's installers sets `MADEIRA_MADSYNC_SESSION=0`, and madsync is off
-for that session, including the game Valve's client then starts in it. The
-madsync default is unchanged (`inproc-sync` still defaults to 1, and with the
-variable unset `madsync_enabled()` returns what it returned before); no other
+for that session, including the game Valve's client then starts in it. With
+the variable unset, `madsync_enabled()` returns what `madeira.cfg` selects
+(madsync only with `inproc-sync = 1`; fastsync is the default engine); no other
 code sets the variable. The next start, with the choice at "Skip", uses the
 configured engine again.
 
@@ -337,3 +417,10 @@ credentials:
 - `build/madeira-dock/build.sh --check`: Dock's own ASan/UBSan unit tests
   (transfer parsing, 2,000 malformed inputs, client selection, launch-result
   and callback bounds).
+- `check-dock-start-screen.py`: the starting screen's rules compiled from
+  production Swift (owner classes by folder, which window is the game's, the
+  one-time-install windows, reveal and cover timing, Show desktop, the status
+  texts and the stop rule), Winios's census extracted from `Winios.m` under
+  ASan/UBSan and ThreadSanitizer (top-level windows only, one path lookup per
+  process, frames and swapchains, capacity, the born-minimized restore and its
+  switch), the driver's path form, and the wiring and glyph row.

@@ -167,8 +167,6 @@ stage_win32u_unix() { build/win32u-unix/build.sh; }
 # iOS-patched objects. A seed failure only matters if build.sh doesn't replace it.
 stage_wineserver() {
     export PATH="$(brew --prefix llvm)/bin:$PATH"   # llvm-objcopy for the symbol renames
-    # compiled from wine/server/thread.c below: async I/O APCs for busy threads
-    apply_wine_patches patches/wine-server-apc-requeue.patch
     local base=app/Madeira/libwineserver.a
     if [ ! -f "$base" ] && [ ! -f build/wineserver/obj/libwineserver.a ]; then
         echo "No base libwineserver.a; seeding from wine/server"
@@ -391,7 +389,10 @@ stage_pe() {
 
 # Binary fixes to the tracked prebuilt PE modules (each script says what and why).
 stage_pe_fixes() {
-    python3 tools/patch-xtajit-cpuid.py
+    # tools/patch-xtajit-cpuid.py patched the per-CPU CPUID table index in the tracked
+    # xtajit.dll; since upstream round 3 that DLL is built from FEX with the bound
+    # (FEX #5), so the patch finds nothing to do. Kept for older DLLs.
+    echo "no binary fixes for this tree (xtajit CPUID: fixed upstream, FEX #5)"
 }
 
 # Madeira Dock (docs/MADEIRA_DOCK.md): dockhost.exe is a gitignored build output;
@@ -411,12 +412,11 @@ stage_dock() {
     done
     build/madeira-dock/build.sh
     [ -f app/Madeira/arm64ec-windows/dockhost.exe ] || die "dockhost.exe was not staged"
-    # patches/madeira-dock-licence-wait.patch makes the poll pause alertable
-    if [ -f patches/madeira-dock-licence-wait.patch ]; then
-        grep -aq SleepEx app/Madeira/arm64ec-windows/dockhost.exe \
-            || die "dockhost.exe lacks the alertable poll pause (SleepEx)"
-        echo "dockhost.exe: alertable poll pause present"
-    fi
+    # madeira-dock #1 (in the pin since upstream round 3) makes the poll pause
+    # alertable, so async I/O completions of the host's own thread reach it
+    grep -aq SleepEx app/Madeira/arm64ec-windows/dockhost.exe \
+        || die "dockhost.exe lacks the alertable poll pause (SleepEx)"
+    echo "dockhost.exe: alertable poll pause present"
 }
 
 stage_app() {

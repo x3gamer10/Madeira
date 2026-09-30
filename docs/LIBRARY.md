@@ -35,18 +35,40 @@ Removing an entry never removes the game's files or saves.
 
 - Layouts: cards, compact cards, list and compact list (one short row per
   game). Sort by last played, name, date added or folder size. Search by title.
-- The games section collapses by tapping its title.
+- Sections, as in the fork's library: when Madeira Dock is available,
+  **Steam** (the Steam games being downloaded and the games Steam has
+  installed, with their count; a **Sign in to Steam** card when signed out),
+  its **Not installed** group (the account's other games, with their count),
+  then **Other games** (the games you added; **+** in the navigation bar adds one). Tapping
+  **Steam** or **Other games** collapses it; **Not installed** folds on its
+  own, open by default; each state is remembered. Search, the layout and, for
+  installed games, Sort by apply to every section. Pull down to read the
+  Steam install records and the account's library again. Without Madeira
+  Dock the games you added are one grid.
+- Grid cards: a game that is not installed shows its artwork darkened, with a
+  download glyph on a soft circle of blur. Every grid card throws ambient
+  light on the page around it, like an LED strip behind a TV: its artwork's own
+  colours, with arcs of the ring brightening and falling into shadow and the
+  colours travelling around it as if a film were playing (fainter and less vivid
+  for a game that is not installed; held still with Reduce Motion). Pressing a
+  card shrinks its artwork, and its light draws in with crisp rays and goes out
+  behind it like a spotlight's aperture closing; on release the artwork springs
+  back and the light opens again slowly. The width a row of cards leaves goes
+  into the gaps between them, so each card's light keeps to its own space.
 - **Desktop** opens the Wine desktop (explorer and services in a virtual
   desktop) with its own profile; its Resolution is the desktop's size.
 - The build label (`MadeiraBuild` in Info.plist, else the bundle version) is
-  shown under the title and in the developer interface's status row.
+  shown in Settings (Ready to play) and in the developer interface's status row.
 - **Settings**: JIT and memory status, Enable JIT, extended logging, pointer
   mode (Absolute, Relative or Touch) and touch sensitivity, **Display** (hold
   the display at its maximum rate, off by default), **Memory & sync** (swap tier
-  Off/1/2/4 GB, off by default; Madsync, on by default), the interface
+  Off/1/2/4 GB, off by default; sync engine, Fastsync by default), the interface
   switch and **Credits** (the last section). Display applies from the next session or FPS limit change; Memory &
-  sync after a restart. They write `env.MADEIRA_PROMOTE`, `swap-mb` and
-  `inproc-sync` in `Documents/madeira.cfg`, keeping every other line.
+  sync after a restart. They write `env.MADEIRA_PROMOTE`, `swap-mb`,
+  `inproc-sync` and `env.MADEIRA_FASTSYNC` in `Documents/madeira.cfg`, keeping
+  every other line. With neither sync key set the engine is fastsync
+  (`madeira_cfg_sync_engine` in `build/madeira_cfg.h`); `inproc-sync = 1` selects
+  madsync.
 
 ## Game details
 
@@ -97,7 +119,9 @@ Play applies the profile and runs the same `runWineFullSequence` as the
 developer interface's buttons. The game is shown full screen in either
 orientation. A starting screen with the game's cover stays until the first
 frames arrive (Metal presents or a desktop surface); after 30 seconds it offers
-**Show game view**. A row of round glyph-only buttons (their words are
+**Show game view**. A Madeira Dock start keeps it, with the Dock's status,
+until the game's own window is shown, and adds **Show desktop**
+(`docs/MADEIRA_DOCK.md`, "Starting screen"). A row of round glyph-only buttons (their words are
 VoiceOver labels) holds **Show live log**, which shows the most recent log lines.
 
 The small menu button (drag to move; it fades after three seconds) opens the
@@ -168,14 +192,16 @@ menu, and the one-session-per-run rule. That session is not added to the
 library.
 
 **Steam games in the library** (`app/Madeira/SteamGames.swift`). When Madeira
-Dock is available, the library shows a **Steam** section above the games you
-added. It lists the games Steam has installed in the prefix, exactly as Dock's
-own discovery finds them (`appmanifest_<appid>.acf` in `C:\Program Files
-(x86)\Steam\steamapps` and the other C: libraries its `libraryfolders.vdf`
-lists), and, once you are signed in, the account's owned games that are not
-installed yet, which are installed from their download sheet
-(`docs/STEAM_LIBRARY.md`). The section follows the library's search and
-collapses like the games section. Artwork comes from Steam's public store CDN.
+Dock is available, the library shows a **Steam** section above **Other
+games**, the games you added. It lists the games Steam has installed in the
+prefix, exactly as Dock's own discovery finds them (`appmanifest_<appid>.acf`
+in `C:\Program Files (x86)\Steam\steamapps` and the other C: libraries its
+`libraryfolders.vdf` lists), and, once you are signed in, under **Not
+installed**, the account's owned games that are not installed yet, which are
+installed from their download sheet (`docs/STEAM_LIBRARY.md`); a game being
+downloaded moves up to the installed games. The section follows the library's
+search and layout and collapses like Other games. Artwork comes from Steam's
+public store CDN.
 An installed game opens its **Game details** page (above): the game is a
 library entry with its own settings, listed only in the Steam section, and its
 **Play** goes through Dock's launch path with the entry as its launch profile,
@@ -188,7 +214,8 @@ do, and only in Madeira Dock's own library folder. Controller focus does not
 reach the section yet.
 
 Log tags: `[onboarding]` (`shown reason=… steps=…`, `step=…`, `done`,
-`skipped`), `[steam-games]` (counts and App IDs) and the library and download
+`skipped`), `[steam-games]` (counts and App IDs), `[library-sections]`
+(`native-steam=… sections=… collapse=…`, flags only) and the library and download
 tags of `docs/STEAM_LIBRARY.md`. No account name, token or path is logged.
 
 ## Controllers
@@ -219,6 +246,8 @@ menu owns input, the game sees a connected pad at rest.
 | `MADEIRA_SCREEN_SHAPE_RESOLUTION` | on | no Screen shape resolution choice |
 | `MADEIRA_FRONTEND_KEYBOARD` | on | Keyboard opens the game view's own keyboard instead of the key window |
 | `MADEIRA_ONBOARDING` | on | first-run setup never opens, and Settings › Steam has no **Run setup again** |
+| `MADEIRA_LIBRARY_COLLAPSE` | on | the **Steam** and **Other games** titles do not collapse (**Not installed** still folds) |
+| `MADEIRA_LIBRARY_AMBIENT` | on | no ambient light around the library's grid cards |
 
 Opt-in (`env.NAME = 1`), off by default:
 
@@ -245,6 +274,10 @@ without Dock, the done key, the `MADEIRA_ONBOARDING` switch, and the wiring
 their public pieces).
 `build/host-tests/check-steam-games.py` covers the library's Steam section: Dock's
 discovery on a synthetic drive_c laid out as Steam writes it, the merge of
-installed and owned games, the section, status, search, Play and artwork rules,
-and that Play uses only Dock's launch path. `build/host-tests/check-steam-library.py`
+installed and owned games, the section, status, card pill, search, Play and
+artwork rules, the program an installed game's pills describe, the groups of the
+library's sections and their Sort by order, and that Play uses only Dock's launch
+path. `build/host-tests/check-library-sections.py` covers the library page's
+sections (order, texts, collapsing, search, layout, pull to refresh).
+`build/host-tests/check-steam-library.py`
 covers the owned library and downloads (`docs/STEAM_LIBRARY.md`).

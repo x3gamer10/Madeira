@@ -688,8 +688,8 @@ static void madeira_link_syswow64_wbem(NSFileManager *fm, NSString *prefix, NSSt
             linked, sizeof(wbem) / sizeof(wbem[0]));
 }
 
-/* C:\windows\winsxs for 32-bit targets: the x86 side-by-side assemblies Wine
- * ships.
+/* C:\windows\winsxs for 32-bit processes: the x86 side-by-side assemblies Wine
+ * ships. Re-seeded every session, because the links name the bundle path.
  *
  * The prefix has no winsxs directory: the template does not carry one and
  * this port never runs wineboot's fake-DLL install, which is what builds it on
@@ -1203,6 +1203,14 @@ static void *wine_process_thread(void *arg) {
                     LOG("madeira.cfg env: %{public}s=%{public}s", k.UTF8String, v.UTF8String);
                     fprintf(stderr, "[madeira-env] ml1062 %s=%s\n", k.UTF8String, v.UTF8String);
                 }
+                /* Fastsync is the default sync engine: with neither inproc-sync nor
+                 * env.MADEIRA_FASTSYNC in madeira.cfg, Wine gets MADEIRA_FASTSYNC=auto,
+                 * the value Settings > Sync engine > Fastsync writes. Never overrides a
+                 * value already set (a game's own fastsync switch sets 0). */
+                if (madeira_cfg_sync_engine() == MADEIRA_SYNC_FASTSYNC && !getenv("MADEIRA_FASTSYNC")) {
+                    setenv("MADEIRA_FASTSYNC", "auto", 0);
+                    fprintf(stderr, "[madeira-env] sync engine: fastsync (default), MADEIRA_FASTSYNC=auto\n");
+                }
             }
         }
 
@@ -1363,15 +1371,19 @@ static void *wine_process_thread(void *arg) {
                 }
             }
 
-            /* WoW64: the i386 farm for every session once the bundle has it;
-             * the x86 side-by-side store and syswow64\wbem for a 32-bit
-             * target (docs/WOW64.md). */
+            /* WoW64: the i386 farm, syswow64\wbem and the x86 side-by-side
+             * store for every session once the bundle has it (docs/WOW64.md).
+             * The store was seeded for a 32-bit target only, but a 64-bit
+             * target (a launcher, the Dock host) starts 32-bit children too,
+             * and their activation contexts redirect comctl32 and the VC80/
+             * VC90 CRT into the store. Its links name the bundle path, which
+             * changes on every reinstall: a session with a 64-bit target after
+             * a reinstall left them dangling, and such a child died in the
+             * loader with c0000135 for DLLs syswow64 still had. */
             if (has_i386_set) {
                 madeira_link_syswow64(fm, prefix, bundlePath);
-                if (is_i386_target) {
-                    madeira_link_syswow64_wbem(fm, prefix, bundlePath);
-                    madeira_seed_winsxs_x86(fm, prefix, bundlePath);
-                }
+                madeira_link_syswow64_wbem(fm, prefix, bundlePath);
+                madeira_seed_winsxs_x86(fm, prefix, bundlePath);
             }
 
             /* ml719: REPAIR THE SHELL FOLDERS. They ship as symlinks to the BUILD
