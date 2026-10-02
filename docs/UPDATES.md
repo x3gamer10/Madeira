@@ -15,10 +15,10 @@ IPA, so a fix to a Windows DLL does not cost a reinstall.
 
 ## How it works
 
-1. `scripts/build-all-macos.sh` (stage `ipa`) hashes every file in the three folders into
+1. `tools/build-all-macos.sh` (stage `ipa`) hashes every file in the three folders into
    `build-logs/pe-manifest.txt` and stamps the manifest's SHA-256 into the app's
    `Info.plist` as `MadeiraPEBase`, the build's identity.
-2. `scripts/make-update-pack.sh <installed build's pe-manifest.txt>` packs the files whose
+2. `tools/make-update-pack.sh <installed build's pe-manifest.txt>` packs the files whose
    hash changed (or that are new) into `madeira-update.zip`, containing `madeira-updates/`
    with the same folder layout and `base.txt` = the installed build's `MadeiraPEBase`.
 3. On the device, `madeira-updates` goes into On My iPhone › Madeira (the app's Documents).

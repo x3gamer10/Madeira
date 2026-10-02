@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PE helpers for rebuilt Wine modules (scripts/build-all-macos.sh, stage_wine_arm64ec).
+"""PE helpers for rebuilt Wine modules (tools/build-all-macos.sh, stage_wine_arm64ec).
 
   pe-sections.py pad-ntdll FILE
       Pad FILE with zeros to SizeOfImage + 0x50000, as build/wine-pe/build-ntdll.sh

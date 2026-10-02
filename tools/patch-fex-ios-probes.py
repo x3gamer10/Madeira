@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # From github.com/bahacan16/madeira-bcd (tools/patch-fex-ios-probes.py), GPL-3.0-or-later like
 # the rest of Madeira. Applied to the FEX submodule working tree at build time by
-# scripts/build-all-macos.sh; nothing is committed to FEX.
+# tools/build-all-macos.sh; nothing is committed to FEX.
 """Guard two FEX diagnostic probes that do not compile for the iOS static libs.
 
 FEX 0f8edf8 (ios-port-2607), as pinned by upstream Madeira:

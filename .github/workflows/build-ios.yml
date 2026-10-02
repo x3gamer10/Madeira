@@ -40,7 +40,7 @@ jobs:
             toolchains/llvm-ios-build/lib/*.a
             toolchains/llvm-project/llvm/include
       - if: steps.llvm.outputs.cache-hit != 'true'
-        run: STAGES="prereqs llvm-ios" bash scripts/build-all-macos.sh
+        run: STAGES="prereqs llvm-ios" bash tools/build-all-macos.sh
       - if: failure()
         uses: actions/upload-artifact@v4
         with: { name: llvm-logs, path: build-logs }
@@ -73,14 +73,14 @@ jobs:
       # The 32-bit (WoW64) Windows farm takes ~an hour to build; reuse it until the
       # wine or DXMT pin (or its build script, or an i386 patch) changes.
       - id: i386key
-        run: echo "key=i386-farm-$(git -C wine rev-parse HEAD)-$(git -C research/dxmt rev-parse HEAD)-${{ hashFiles('build/wine-i386/build.sh', 'patches/wine-i386-*.patch') }}" >> "$GITHUB_OUTPUT"
+        run: echo "key=i386-farm-$(git -C wine rev-parse HEAD)-$(git -C dxmt rev-parse HEAD)-${{ hashFiles('build/wine-i386/build.sh', 'patches/wine-i386-*.patch') }}" >> "$GITHUB_OUTPUT"
       - id: i386cache
         uses: actions/cache/restore@v4
         with:
           key: ${{ steps.i386key.outputs.key }}
           path: app/Madeira/i386-windows
-      - run: chmod +x scripts/build-all-macos.sh build/*/*.sh build/*.sh
-      - run: VCRUNTIME_DIR="$PWD/vcrt" REQUIRE_CACHED_LLVM=1 scripts/build-all-macos.sh
+      - run: chmod +x tools/*.sh build/*/*.sh build/*.sh
+      - run: VCRUNTIME_DIR="$PWD/vcrt" REQUIRE_CACHED_LLVM=1 tools/build-all-macos.sh
       # Saved even if a later stage failed, but only a farm that actually built.
       - if: always() && steps.i386cache.outputs.cache-hit != 'true' && hashFiles('app/Madeira/i386-windows/kernel32.dll') != ''
         uses: actions/cache/save@v4
@@ -103,7 +103,7 @@ jobs:
           BASE_RUN: ${{ inputs.update_base_run }}
         run: |
           gh run download "$BASE_RUN" -R "$GITHUB_REPOSITORY" -n pe-manifest -D base-manifest
-          bash scripts/make-update-pack.sh base-manifest/pe-manifest.txt build/ipa/madeira-update.zip
+          bash tools/make-update-pack.sh base-manifest/pe-manifest.txt build/ipa/madeira-update.zip
       - if: inputs.update_base_run != '' && hashFiles('build/ipa/madeira-update.zip') != ''
         uses: actions/upload-artifact@v4
         with: { name: madeira-update, path: build/ipa/madeira-update.zip }

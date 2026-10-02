@@ -40,7 +40,7 @@ struct DockGame: Identifiable, Equatable, Sendable {
     }
 }
 
-/// Madeira Dock: a small headless host (research/madeira-dock, built by
+/// Madeira Dock: a small headless host (madeira-dock, built by
 /// build/madeira-dock/build.sh into arm64ec-windows/dockhost.exe) that loads
 /// Valve's genuine Windows Steam client inside the Wine session, signs in
 /// with the user's own refresh token and asks the client to start an
@@ -207,7 +207,7 @@ enum MadeiraDock {
                 return "Madeira Dock could not initialize the Steam session (code 30). Export the log to identify the failed check."
             }
             // The host waits 90 s after sign-in for Valve's client to count the game
-            // among the account's subscriptions (research/madeira-dock src/session.c).
+            // among the account's subscriptions (madeira-dock src/session.c).
             if result == 34 {
                 return fields["session-authenticated-online"] == "1"
                     ? "Steam signed in but did not confirm this game's license in time. Export the log before trying again."
@@ -260,6 +260,8 @@ enum MadeiraDock {
                     : "Steam needs to install or update content this game depends on before it can start. Start the game again to let Madeira Dock wait for Steam."
             case 18: return "Steam does not see this game as installed."
             case 28: return "Steam could not find the game's executable."
+            // Steam's CreateProcess for the game failed: Madeira could not load the program.
+            case 29: return "Steam started this game's program, but Madeira could not load it (Steam reports an invalid platform). Export the log: it names the reason."
             case 22, 23, 24: return "Steam could not read this game's configuration. Try again."
             case 25: return "Steam says this game is not released yet."
             case 26: return "Steam says this game is not available in your region."
@@ -287,7 +289,7 @@ enum MadeiraDock {
         "ceg-finished-jobs", "ceg-result", "ceg-disabled", "ceg-unsupported-client",
         "ceg-scm", "ceg-scm-started", "ceg-scm-error", "ceg-service-registered", "ceg-service-install", "ceg-service-stop", "ceg-scm-stopped",
         "shutdown-begin", "shutdown-complete", "probe-result"]
-    /// The host's report rounds (research/madeira-dock src/main.c).
+    /// The host's report rounds (madeira-dock src/main.c).
     static let reportRounds: Set<String> = ["ml1820", "ml1830", "ml1860", "ml1870", "ml1970", "ml1990", "ml2000", "ml2011", "ml2015"]
 
     static func parseReport(_ data: Data) -> Report {
