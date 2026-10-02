@@ -233,6 +233,8 @@ stage_dxmt_ios() {
     # airconv_context.cpp includes air_{msad,samplepos,tessellation}.h, which DXMT's
     # meson build generates (src/airconv/meson.build: metal -> .air -> xxd). build.sh
     # has no such step, so generate them into its shader-headers include dir.
+    # patches/dxmt-*.patch: DXMT source fixes this tree carries ahead of the pin.
+    apply_patches dxmt patches/dxmt-*.patch
     local sh=build/dxmt-ios/shader-headers s n
     mkdir -p "$sh"
     for s in dxmt/src/airconv/shaders/*.metal; do
@@ -248,18 +250,22 @@ stage_dxmt_ios() {
 }
 
 # Apply Wine patches to the submodule's working tree, each once.
-apply_wine_patches() {
-    local p
+# apply_patches <submodule dir> <patch>...: apply each patch file to that submodule
+# working tree once (a patch already in, by an earlier run or because the pin now
+# carries it, is reported and skipped).
+apply_patches() {
+    local d="$1" p; shift
     for p in "$@"; do
         [ -f "$p" ] || continue
-        if git -C wine apply --reverse --check "$R/$p" 2>/dev/null; then
+        if git -C "$d" apply --reverse --check "$R/$p" 2>/dev/null; then
             echo "already applied: $p"
         else
-            git -C wine apply "$R/$p" || die "cannot apply $p to wine"
+            git -C "$d" apply "$R/$p" || die "cannot apply $p to $d"
             echo "applied: $p"
         fi
     done
 }
+apply_wine_patches() { apply_patches wine "$@"; }
 
 # WoW64 (32-bit x86 games, e.g. Saints Row 2): the i386 Windows farm that
 # app/Madeira/i386-windows must hold. Upstream does not commit it (docs/WOW64.md,
@@ -400,16 +406,7 @@ stage_pe_fixes() {
 stage_dock() {
     # patches/madeira-dock-*.patch: the host's source changes this tree carries
     # ahead of the submodule pin (each patch says where it comes from).
-    local p
-    for p in patches/madeira-dock-*.patch; do
-        [ -f "$p" ] || continue
-        if git -C madeira-dock apply --reverse --check "$R/$p" 2>/dev/null; then
-            echo "already applied: $p"
-        else
-            git -C madeira-dock apply "$R/$p" || die "cannot apply $p to madeira-dock"
-            echo "applied: $p"
-        fi
-    done
+    apply_patches madeira-dock patches/madeira-dock-*.patch
     build/madeira-dock/build.sh
     [ -f app/Madeira/arm64ec-windows/dockhost.exe ] || die "dockhost.exe was not staged"
     # madeira-dock #1 (in the pin since upstream round 3) makes the poll pause

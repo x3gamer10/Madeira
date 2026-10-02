@@ -1,0 +1,18 @@
+dxmt: madeira_cfg.h is four directories up now that dxmt/ is at the top level.
+
+willfaust/Madeira 79e28f0 moved research/dxmt to dxmt/ but the pinned DXMT
+(a5e0cd3) still reaches build/madeira_cfg.h from src/winemetal/unix with five
+"../", one above the repository, so winemetal_unix failed to compile.
+Applied to the dxmt submodule by stage_dxmt_ios (tools/build-all-macos.sh).
+
+diff --git a/src/winemetal/unix/winemetal_unix.c b/src/winemetal/unix/winemetal_unix.c
+index fcfe237..3f0dd42 100644
+--- a/src/winemetal/unix/winemetal_unix.c
++++ b/src/winemetal/unix/winemetal_unix.c
+@@ -1,5 +1,5 @@
+ #include <stdatomic.h>
+-#include "../../../../../build/madeira_cfg.h"   /* ml1095: one config file */
++#include "../../../../build/madeira_cfg.h"   /* ml1095: one config file */
+ #include <sys/mman.h>
+ #include <mach/vm_statistics.h>
+ #include <errno.h>
