@@ -3471,6 +3471,38 @@ static void *ios_mach_exception_thread( void *arg )
                         *(uint16_t *)rw_addr = (uint16_t)IOS_STORE_SRC(rt);
                         emulated = 1;
                     }
+                    /* SIMD/FP STR (register offset): size 111 1 00 opc 1 Rm option S 10 Rn Rt
+                     *   (mask 0x3f600c00, val 0x3c200800: V=1, L=0, register-offset form).
+                     *   opc<1>=1 with size=00 is Q (16 bytes); otherwise 1 << size bytes
+                     *   (B, H, S, D). Left 4 Dead (32-bit, FEX-translated SSE copy) stores
+                     *   `str q16, [x19, w11, uxtw]` (0x3cab4a70) into its RWX buffer right
+                     *   after the intro; undecoded, the write never completed and the
+                     *   process was terminated after 2000 identical redeliveries.
+                     *   fault_addr is the final address; there is no writeback. The whole
+                     *   store must land in the same alias, as for the Q-pair stores. */
+                    else if ((insn & 0x3f600c00) == 0x3c200800)
+                    {
+                        int rt = insn & 0x1f;
+                        int size = (insn >> 30) & 3;
+                        int nbytes = ((insn >> 23) & 1) ? (size == 0 ? 16 : 0) : (1 << size);
+                        uintptr_t rw_last = 0;
+                        if (nbytes)
+                            rw_last = in_jit ? (uintptr_t)(rw + ((fault_addr + nbytes - 1) - rx))
+                                             : (uintptr_t)ios_jit_anon_alias_lookup( fault_addr + nbytes - 1 );
+                        if (have_neon && nbytes && rw_last == (uintptr_t)rw_addr + nbytes - 1)
+                        {
+                            memcpy((void *)rw_addr, &neon_state.__v[rt], nbytes);
+                            emulated = 1;
+                            {
+                                static int strreg_n;
+                                if (strreg_n < 4)
+                                    dprintf(STDERR_FILENO,
+                                        "[str-simd-reg] #%d insn=0x%08x bytes=%d addr=0x%llx rw=0x%llx\n",
+                                        ++strreg_n, insn, nbytes, (unsigned long long)fault_addr,
+                                        (unsigned long long)rw_addr);
+                            }
+                        }
+                    }
                     
 
                     /* iOS-Madeira ml626: SWP{A}{L}{B,H} — ATOMIC SWAP.
