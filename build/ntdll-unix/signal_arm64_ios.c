@@ -3022,6 +3022,29 @@ static void *ios_mach_exception_thread( void *arg )
                 } else {
                     rw_addr = ios_jit_anon_alias_lookup(fault_addr);
                 }
+                /* A 32-bit guest page whose Windows protection has no write (FEX's
+                 * WoW64 SMC tracking took it away after translating code there): the
+                 * guest's write must reach FEX, which drops the stale translation and
+                 * restores the write; the retried store is then emulated below. See
+                 * ios_wow_store_needs_guest_fault (virtual_ios.c). Left 4 Dead's
+                 * libcef (V8) died on a null+0xf read in code it had just patched. */
+                int smc_defer = 0;
+                if (rw_addr && !in_jit)
+                {
+                    extern int ios_wow_store_needs_guest_fault( unsigned long long va );
+                    if (ios_wow_store_needs_guest_fault( (unsigned long long)fault_addr ))
+                    {
+                        static int smc_defer_n;
+                        smc_defer = 1;
+                        if (smc_defer_n < 8 || !(smc_defer_n & 1023))
+                            dprintf(STDERR_FILENO,
+                                "[store-smc-defer] #%d pc=0x%llx addr=0x%llx: guest page not writable, "
+                                "leaving the fault to FEX's SMC handler\n",
+                                smc_defer_n + 1, (unsigned long long)fault_pc,
+                                (unsigned long long)fault_addr);
+                        smc_defer_n++;
+                    }
+                }
                 /* ml348 DISCRIMINATOR: a write fault with NO alias is a
                  * different bug from a write fault whose instruction we can't
                  * decode, and the two need opposite fixes. Without this the
@@ -3062,7 +3085,7 @@ static void *ios_mach_exception_thread( void *arg )
                                 (unsigned long long)fault_pc);
                     }
                 }
-                if (rw_addr && (uintptr_t)fault_pc >= 0x100000000ULL)
+                if (rw_addr && !smc_defer && (uintptr_t)fault_pc >= 0x100000000ULL)
                 {
                     uint32_t insn; ios_fault_read_insn( (uint64_t)(uintptr_t)fault_pc, &insn );  /* ml982 */
                     int emulated = 0;
